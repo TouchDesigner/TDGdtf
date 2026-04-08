@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "TDGdtf"
+version = "0.1.0"
+description = "TDGdtf"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pygdtf"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.touchdesigner.TDPyEnvManagerContext]
+contextVersion = 2
+createdByVersion = "1.4.1"
+active = true
+mode = "Python vEnv"
+envName = ".venv"
+installPath = "."
+pythonVersion = "3.11"
+autoSetup = true
+autoSetupReqs = []
+autoSetupSyncReqs = false
+extraPaths = ["src"]

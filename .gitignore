@@ -1,0 +1,30 @@
+# ── Python ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Virtual environment ────────────────────────────
+.venv/
+
+# ── TouchDesigner ──────────────────────────────────
+Backup/
+*.toe.dir/
+# Numbered auto-save toe files (e.g. gdtfParser.67.toe)
+*.[0-9]*.toe
+
+# ── IDE / Editor ───────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Claude ─────────────────────────────────────────
+.claude/

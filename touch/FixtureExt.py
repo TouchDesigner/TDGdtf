@@ -1,0 +1,929 @@
+"""
+Extension classes enhance TouchDesigner components with python. An
+extension is accessed via ext.ExtensionClassName from any operator
+within the extended component. If the extension is promoted via its
+Promote Extension parameter, all its attributes with capitalized names
+can be accessed externally, e.g. op('yourComp').PromotedFunction().
+
+Help: search "Extensions" in wiki
+"""
+from TDStoreTools import StorageManager
+import pygdtf
+from typing import Dict, List, Any, Optional, Tuple
+import time
+
+from TDGdtf.fixture import DMXChannelSet, DMXChannelFunction, DMXValue, DMXModeInfo, TDDMXChannel, _ScalarValue, TouchDesignerFixture
+from TDGdtf.parser import GDTFParser
+from TDGdtf.utils import legalTdParName
+
+tag = 'GDTFPARSER'
+
+
+class DMXLogicalChannel:
+	"""Pure data/logic object representing a single DMX logical channel.
+	No TouchDesigner operator references — all parameter UI is handled by FixtureExt.
+	"""
+	def __init__(self, name: str, channelFunctionDicts: list, normalized: bool, byteCount: int = 8, components: int = 1):
+		self.name = name
+		self.normalized = normalized
+		self.byteCount = byteCount
+		self.components = components
+		channelFunctionList = [DMXChannelFunction.fromDict(d) for d in channelFunctionDicts]
+		self.channelFunctions: List[DMXChannelFunction] = channelFunctionList
+		self._currentFunction: Optional[DMXChannelFunction] = channelFunctionList[0] if channelFunctionList else None
+		self._dmxValue: DMXValue = DMXValue(
+			x=self._currentFunction.default.value if self._currentFunction else 0,
+			y=0,
+			z=0,
+			w=0,
+			callback=self._dmxValueChanged
+		)
+		self._currentFunctionValue: float = 0.0
+		self._currentChannelSet: int = 0
+		self._parBaseName: str = legalTdParName(name)
+
+	def __int__(self) -> float:
+		return self._dmxValue.x
+
+	def __str__(self) -> str:
+		return f"DMXLogicalChannel(name={self.name}, dmxValue={self._dmxValue})"
+
+	def _dmxValueChanged(self, value: DMXValue):
+		self.dmxValue = DMXValue(value.x, value.y, value.z, value.w, callback=self._dmxValueChanged)
+
+	@property
+	def dmxValue(self) -> DMXValue:
+		return self._dmxValue
+
+	@dmxValue.setter
+	def dmxValue(self, value: DMXValue):
+		self._dmxValue = value
+
+	@property
+	def currentFunction(self) -> int:
+		if self._currentFunction and self._currentFunction in self.channelFunctions:
+			return self.channelFunctions.index(self._currentFunction)
+		return 0
+
+	@currentFunction.setter
+	def currentFunction(self, menuIndex: int):
+		"""Set the current channel function by its menu index."""
+		menuIndex = int(menuIndex)
+		if len(self.channelFunctions) > 0 and menuIndex < len(self.channelFunctions):
+			self._currentFunction = self.channelFunctions[menuIndex]
+			if self._currentFunction.channelSets:
+				self._dmxValue.x = self._currentFunction.channelSets[0].dmxRange[0].value
+			self._currentChannelSet = 0
+		else:
+			debug('Invalid menu index for channel function:', menuIndex)
+
+	@property
+	def currentFunctionValue(self) -> float:
+		return self._currentFunctionValue
+
+	@currentFunctionValue.setter
+	def currentFunctionValue(self, value: float):
+		self._currentFunctionValue = value
+		self._dmxValue.x = self.functionValToDmxVal(value)
+
+	@property
+	def currentChannelSet(self) -> int:
+		return self._currentChannelSet
+
+	@currentChannelSet.setter
+	def currentChannelSet(self, value: int):
+		value = int(value)
+		if self._currentFunction and value < len(self._currentFunction.channelSets):
+			channelSet = self._currentFunction.channelSets[value]
+			self._dmxValue.x = channelSet.dmxRange[0].value
+		self._currentChannelSet = value
+
+	def functionValToDmxVal(self, functionValue: float) -> int:
+		"""Convert a physical function value to a DMX value based on the current channel function."""
+		if self._currentFunction is None:
+			return 0
+		physicalFrom, physicalTo = self._currentFunction.physicalRange
+		dmxFrom, dmxTo = self._currentFunction.dmxRange
+		physMin = physicalFrom.value
+		physMax = physicalTo.value
+		dmxMin = dmxFrom.value
+		dmxMax = dmxTo.value
+		normalized = tdu.remap(functionValue, physMin, physMax, 0, 1)
+		return int(tdu.remap(normalized, 0, 1, dmxMin, dmxMax))
+
+	def toDict(self) -> dict:
+		"""Serialize channel runtime state."""
+		return {
+			'dmxValue': {'x': self._dmxValue.x, 'y': self._dmxValue.y,
+						 'z': self._dmxValue.z, 'w': self._dmxValue.w},
+			'currentFunction': self.currentFunction,
+			'currentFunctionValue': self._currentFunctionValue,
+			'currentChannelSet': self._currentChannelSet,
+		}
+
+	def restoreValues(self, d: dict):
+		"""Apply saved runtime state."""
+		dmx = d.get('dmxValue', {})
+		self._dmxValue = DMXValue(
+			dmx.get('x', 0), dmx.get('y', 0),
+			dmx.get('z', 0), dmx.get('w', 0),
+			callback=self._dmxValueChanged
+		)
+		funcIdx = d.get('currentFunction', 0)
+		if self.channelFunctions and funcIdx < len(self.channelFunctions):
+			self._currentFunction = self.channelFunctions[funcIdx]
+		self._currentFunctionValue = d.get('currentFunctionValue', 0.0)
+		self._currentChannelSet = d.get('currentChannelSet', 0)
+
+
+class FixtureInstance:
+	"""One logical fixture instance with its own set of DMX channel values."""
+	def __init__(self, fixtureId: int, label: str, channelTemplate: list):
+		self.fixtureId = fixtureId
+		self.label = label
+		self.channels: Dict[str, DMXLogicalChannel] = {}
+		for ch in channelTemplate:
+			self.channels[ch['name']] = DMXLogicalChannel(
+				name=ch['name'],
+				channelFunctionDicts=ch['channelFunctions'],
+				normalized=ch['normalized'],
+				byteCount=ch['byteCount'],
+				components=ch['components'],
+			)
+
+	def setDmxValue(self, channelName: str, value):
+		ch = self.channels.get(channelName)
+		if ch:
+			ch.dmxValue = DMXValue(value, ch.dmxValue.y, ch.dmxValue.z, ch.dmxValue.w,
+								   callback=ch._dmxValueChanged)
+
+	def setFunction(self, channelName: str, functionIndex: int):
+		ch = self.channels.get(channelName)
+		if ch:
+			ch.currentFunction = functionIndex
+
+	def setFunctionValue(self, channelName: str, value: float):
+		ch = self.channels.get(channelName)
+		if ch:
+			ch.currentFunctionValue = value
+
+	def setChannelSet(self, channelName: str, channelSetIndex: int):
+		ch = self.channels.get(channelName)
+		if ch:
+			ch.currentChannelSet = channelSetIndex
+
+	def toDict(self) -> dict:
+		return {
+			'fixtureId': self.fixtureId,
+			'label': self.label,
+			'channels': {name: ch.toDict() for name, ch in self.channels.items()},
+		}
+
+	@classmethod
+	def fromDict(cls, d: dict, channelTemplate: list) -> 'FixtureInstance':
+		inst = cls(d['fixtureId'], d['label'], channelTemplate)
+		for name, chState in d.get('channels', {}).items():
+			if name in inst.channels:
+				inst.channels[name].restoreValues(chState)
+		return inst
+
+
+class FixtureGroup:
+	"""Named group of fixtures referenced by fixture ID."""
+	def __init__(self, name: str, fixtureIds: List[int]):
+		self.name = name
+		self.fixtureIds = list(fixtureIds)
+
+	def toDict(self) -> dict:
+		return {'name': self.name, 'fixtureIds': self.fixtureIds}
+
+	@classmethod
+	def fromDict(cls, d: dict) -> 'FixtureGroup':
+		return cls(d['name'], d['fixtureIds'])
+
+
+class FixtureExt:
+	"""
+	FixtureExt description
+	"""
+	def __init__(self, ownerComp):
+		self.ownerComp = ownerComp
+		self.fixture = None
+		self._modes = 0
+
+		storedItems = [
+			{'name': '_fixtureName', 'default': ''},
+			{'name': '_fixtureManufacturer', 'default': ''},
+			{'name': '_modeMenu', 'default': tdu.MenuObject([], menuLabels=[]), 'dependable': True},
+			{'name': '_savedChannels', 'default': []},
+			{'name': '_savedModes', 'default': []},
+			{'name': '_fixtures', 'default': []},
+			{'name': '_groups', 'default': {}},
+			{'name': '_nextFixtureId', 'default': 0},
+		]
+
+		self.stored = StorageManager(self, ownerComp, storedItems)
+
+		self._fixtureInstances: List[FixtureInstance] = []
+		self._fixtureGroups: Dict[str, FixtureGroup] = {}
+		self._channelTemplate: list = []
+		self._channelByName: Dict[str, dict] = {}
+		self._parLookup: Dict[str, Tuple[str, str, int]] = {}
+		self._dmxDeps: Dict[str, Any] = {}
+		self._suppressParamCallbacks = False
+
+		if self._savedChannels:
+			self._channelTemplate = self._savedChannels
+			self._restoreState()
+
+	# ── Properties ──────────────────────────────────────────
+
+	@property
+	def Modes(self):
+		return self.fixture.dmxModes[self._modes]
+
+	@Modes.setter
+	def Modes(self, value):
+		self._modes = value.menuIndex
+		mode = self.fixture.dmxModes[self._modes]
+		self.CreateNetwork(dmxMode=mode)
+
+	# ── Fixture Management (promoted) ───────────────────────
+
+	def AddFixture(self, label: str = '') -> int:
+		"""Create a new fixture instance. Returns its auto-incremented ID."""
+		fid = self._nextFixtureId
+		self._nextFixtureId = fid + 1
+		fi = FixtureInstance(fid, label, self._channelTemplate)
+		self._fixtureInstances.append(fi)
+		self._refreshTargetMenu()
+		self._persistFixtures()
+		self._updateDmxDependencies()
+		return fid
+
+	def RemoveFixture(self, fixtureId: int):
+		"""Remove a fixture instance by its ID."""
+		self._fixtureInstances = [fi for fi in self._fixtureInstances if fi.fixtureId != fixtureId]
+		self._refreshTargetMenu()
+		self._persistFixtures()
+		self._updateDmxDependencies()
+
+	def SetFixtureCount(self, count: int):
+		"""Add or remove fixtures to reach the desired count. Removes highest IDs first."""
+		while len(self._fixtureInstances) < count:
+			self.AddFixture()
+		while len(self._fixtureInstances) > count:
+			highest = max(self._fixtureInstances, key=lambda fi: fi.fixtureId)
+			self.RemoveFixture(highest.fixtureId)
+
+	def GetFixtures(self) -> list:
+		"""Return list of fixture info dicts: [{fixtureId, label, index}, ...]"""
+		return [{'fixtureId': fi.fixtureId, 'label': fi.label, 'index': i}
+				for i, fi in enumerate(self._fixtureInstances)]
+
+	def DmxChannel(self, name: str):
+		"""Return the tdu.Dependency for a channel. .val is a list of DMX values (one per fixture)."""
+		return self._dmxDeps.get(name)
+
+	@property
+	def DmxChannels(self) -> dict:
+		"""Dict of channel name -> tdu.Dependency. Each .val is a list of DMX values per fixture."""
+		return dict(self._dmxDeps)
+
+	@property
+	def DmxChannelsByType(self) -> dict:
+		"""Dict with 'point' and 'primitive' keys, each containing a list of channel names."""
+		result = {'point': [], 'primitive': []}
+		for ch in self._channelTemplate:
+			geoType = ch.get('geoType', 'primitive')
+			result[geoType].append(ch['name'])
+		return result
+
+	# ── Group Management (promoted) ─────────────────────────
+
+	def CreateGroup(self, name: str, fixtureIds: List[int]):
+		"""Create or replace a named group of fixture IDs."""
+		knownIds = {fi.fixtureId for fi in self._fixtureInstances}
+		for fid in fixtureIds:
+			if fid not in knownIds:
+				debug('CreateGroup: unknown fixtureId', fid)
+		self._fixtureGroups[name] = FixtureGroup(name, fixtureIds)
+		self._refreshTargetMenu()
+		self._persistFixtures()
+
+	def DeleteGroup(self, name: str):
+		"""Delete a named group."""
+		self._fixtureGroups.pop(name, None)
+		self._refreshTargetMenu()
+		self._persistFixtures()
+
+	def GetGroups(self) -> dict:
+		"""Return dict of group names to fixture ID lists."""
+		return {name: list(g.fixtureIds) for name, g in self._fixtureGroups.items()}
+
+	# ── Value Setters (promoted) ────────────────────────────
+
+	def SetDmxValue(self, channelName: str, value, target='all'):
+		"""Set raw DMX value on a channel for the given target(s)."""
+		for fi in self._resolveTarget(target):
+			fi.setDmxValue(channelName, value)
+		self._updateChannelDisplayParams(channelName, roles={'value'})
+
+	def SetFunction(self, channelName: str, functionIndex: int, target='all'):
+		"""Set the active channel function by index for the given target(s)."""
+		for fi in self._resolveTarget(target):
+			fi.setFunction(channelName, functionIndex)
+		self._updateChannelDisplayParams(channelName)
+
+	def SetFunctionValue(self, channelName: str, value: float, target='all'):
+		"""Set a physical function value for the given target(s)."""
+		for fi in self._resolveTarget(target):
+			fi.setFunctionValue(channelName, value)
+		self._updateChannelDisplayParams(channelName, roles={'value', 'functionvalue'})
+
+	def SetChannelSet(self, channelName: str, channelSetIndex: int, target='all'):
+		"""Set the active channel set by index for the given target(s)."""
+		for fi in self._resolveTarget(target):
+			fi.setChannelSet(channelName, channelSetIndex)
+		self._updateChannelDisplayParams(channelName, roles={'value', 'channelset'})
+
+	# ── Parsing & Network Creation ──────────────────────────
+
+	def Parse(self):
+		t0 = time.time()
+		print(f'[GDTF TIMER] === Parse start ===')
+		parser = GDTFParser()
+		fixture = parser.parseGdtfFile(self.ownerComp.par.Gdtffile.eval())
+		print(f'[GDTF TIMER] parseGdtfFile total:         {time.time()-t0:.3f}s')
+		self.fixture = fixture
+		menuNames = [m.name for m in fixture.dmxModes]
+		self._modeMenu = tdu.ParMenu(menuNames, menuLabels=menuNames)
+		self._fixtureName = fixture.name
+		self._fixtureManufacturer = fixture.manufacturer
+		print(f'[GDTF TIMER] CreateNetwork start:          {time.time()-t0:.3f}s')
+		self.CreateNetwork(fixture.dmxModes[0], myTime=t0)
+		print(f'[GDTF TIMER] === Parse complete:            {time.time()-t0:.3f}s ===')
+
+	def CreateNetwork(self, dmxMode: Optional[DMXModeInfo] = None, myTime: float = 0):
+		"""
+		Create the TouchDesigner network for the fixture based on the parsed GDTF data.
+		"""
+		def _createOp(opType, name):
+			"""Helper function to create an operator of a given type with a specific name."""
+			op = self.ownerComp.create(opType, name)
+			op.tags = [tag]
+			return op
+
+		if not self.fixture:
+			raise ValueError("No fixture data available. Please parse a GDTF file first.")
+
+		if dmxMode is None:
+			dmxMode = self.fixture.dmxModes[0]
+
+		# delete all nodes associated with this tag
+		for operator in self.ownerComp.findChildren(tags=[tag]):
+			operator.destroy()
+		# clear out the fixtureOp's sequential dmx channels
+		fixtureOp = self.ownerComp.op('fixture')
+		fixtureOp.seq.dmxchan.numBlocks = 1
+		for parGroup in fixtureOp.seq.dmxchan.blocks[0].parGroup:
+			parGroup.reset()
+
+		# clear out custom parameters for the Channel Functions page
+		channelFunctionsPage = self.ownerComp.customPages['Channel Functions']
+		for parGroup in channelFunctionsPage.parGroups:
+			parGroup.destroy()
+
+		print(f'[GDTF TIMER]   cleanup old ops/params:     {time.time()-myTime:.3f}s')
+		allChannels = []
+		# first get the geometries
+		primitives = []
+		lineStrips = []
+		primitiveMerge = None
+		lineStripMerge = None
+		geometries = dmxMode.tdGeometries if dmxMode.tdGeometries else []
+		for geo in geometries:
+			geoName = geo.name.lower()
+			geoName = tdu.validName(geoName)
+			groupName = None
+			geoType = 'point'
+			if geo.isSequential:
+				# add in the parent name so that we can identify it more easily
+				geoName = '{}_{}'.format(geo.parent.name.lower(), geoName)
+				# this must be a linestrip
+				geoType = 'point'
+				geoOp = _createOp(linePOP, 'line_{}'.format(geoName))
+				geoOp.par.divs = 1
+				geoOp.cook(force=True)
+				geoOp.seq.pt.numBlocks = len(geo.sequentialMembers)
+				for c, p in enumerate(geo.sequentialMembers):
+					pos = sum(p.position.matrix, [])
+					pos = tdu.Matrix(pos).getTranspose()
+					s, r, t = pos.decompose()
+					geoOp.seq.pt[c].parGroup.pos = t
+				geoOp.seq.attr.numBlocks = len(geo.tdDmxChannels) if geo.tdDmxChannels else 0
+				groupOp = _createOp(groupPOP, 'group_{}'.format(geoName))
+				groupOp.par.grname = geoName
+				groupName = geoName
+				# wire the geometry to the group
+				geoOp.outputConnectors[0].connect(groupOp.inputConnectors[0])
+				attrOp = geoOp
+				lineStrips.append(groupOp)
+			else:
+				# this must be a point primitive
+				geoType = 'primitive'
+				geoOp = _createOp(pointPOP, 'point_{}'.format(geoName))
+				# we need to add a attribute pop to add primitive attributes
+				attrOp = _createOp(attributePOP, 'attr_{}'.format(geoName))
+				# set the attribute class parameter
+				attrOp.par.attrclass = 'primitive'
+				attrOp.seq.attr.numBlocks = len(geo.tdDmxChannels) if geo.tdDmxChannels else 0
+				# wire up the attribute to the geometry
+				geoOp.outputConnectors[0].connect(attrOp.inputConnectors[0])
+				primitives.append(attrOp)
+
+			
+			attrOp.cook(force=True)
+
+			# add all attributes
+			for c, channel in enumerate(geo.tdDmxChannels or []):
+				channel.geoGroup = groupName
+				channel.geoType = geoType
+				channel.tdChannelName = tdu.validName(channel.name)
+				allChannels.append(channel)
+				seqItem = attrOp.seq.attr[c]
+				seqItem.par.customname = channel.tdChannelName
+				seqItem.par.numcomps = channel.components
+
+		print(f'[GDTF TIMER]   geo ops created ({len(geometries)} geos, {len(allChannels)} ch): {time.time()-myTime:.3f}s')
+		# first combine the lineStrips
+		if len(lineStrips) > 1:
+			lineStripMerge = _createOp(mergePOP, 'lineStripMerge')
+			for c, i in enumerate(lineStrips):
+				# wire the line strips to the merge
+				i.outputConnectors[0].connect(lineStripMerge.inputConnectors[c])
+			# now convert the multiple linestrips into a single linestrip primitive
+			primOp = _createOp(primitivePOP, 'primitive_lineStrip')
+			primOp.par.keep = True
+			primOp.par.method = 'pattern'
+			primOp.par.prim0type = 'linestrip'
+			# wire the merge to the primitive
+			lineStripMerge.outputConnectors[0].connect(primOp.inputConnectors[0])
+			lineStripMerge = primOp
+
+		# next combine the primitives
+		if len(primitives) > 1:
+			primitiveMerge = _createOp(attributecombinePOP, 'primitiveMerge')
+			primitiveMerge.par.attrclass = 'primitive'
+			primitiveMerge.seq.input.numBlocks = len(primitives)
+			for c, i in enumerate(primitives):
+				# wire the primitives to the merge
+				i.outputConnectors[0].connect(primitiveMerge.inputConnectors[c])
+				primitiveMerge.seq.input[c].par.attrs = '*'
+
+		# next combine primitives
+		attrCombineOp = _createOp(attributecombinePOP, 'attcombine')
+		attrCombineOp.par.attrclass = 'primitive'
+		if lineStripMerge:
+			# wire the line strip merge to the attribute combine
+			lineStripMerge.outputConnectors[0].connect(attrCombineOp.inputConnectors[len(attrCombineOp.inputs)])
+		elif lineStrips:
+			# wire the first line strip directly to the attribute combine
+			lineStrips[0].outputConnectors[0].connect(attrCombineOp.inputConnectors[len(attrCombineOp.inputs)])
+		attrCombineOp.cook(force=True)
+		if primitiveMerge:
+			# wire the primitive merge to the attribute combine
+			primitiveMerge.outputConnectors[0].connect(attrCombineOp.inputConnectors[len(attrCombineOp.inputs)])
+		elif primitives:
+			# wire the primitives directly to the attribute combine
+			primitives[0].outputConnectors[0].connect(attrCombineOp.inputConnectors[len(attrCombineOp.inputs)])
+
+		attrCombineOp.cook(force=True)
+		for i in range(len(attrCombineOp.inputs)):
+			attrCombineOp.seq.input[i].par.attrs = '*'
+
+		print(f'[GDTF TIMER]   merge/combine wired:       {time.time()-myTime:.3f}s')
+		# create all dmx channels in fixture
+		fixtureOp.seq.dmxchan.numBlocks = len(allChannels)
+		allChannels.sort(key=lambda channel: channel.dmxOffset[0])
+		for c, channel in enumerate(allChannels):
+			seqItem = fixtureOp.seq.dmxchan[c]
+			seqItem.par.name = channel.tdChannelName
+			seqItem.par.valuetype = channel.geoType
+			if channel.geoGroup is not None:
+				seqItem.par.group = channel.geoGroup
+				seqItem.par.name = '{}_{}'.format(channel.geoGroup, channel.tdChannelName)
+			else:
+				seqItem.par.name = channel.tdChannelName
+			seqItem.par.attr = channel.tdChannelName
+			seqItem.par.valueres = 'b{}'.format(channel.bitDepth)
+			seqItem.par.merge = channel.mergeWithAbove
+			seqItem.par.normalized = channel.normalized
+
+		print(f'[GDTF TIMER]   fixture seq dmxchan set:   {time.time()-myTime:.3f}s')
+		# save channel template and build channel params
+		t_save = time.time()
+		self._saveState(allChannels)
+		print(f'[GDTF TIMER]   _saveState:                {time.time()-t_save:.3f}s')
+		self._channelTemplate = self._savedChannels
+		t_cp = time.time()
+		self._createChannelParams(self._channelTemplate)
+		print(f'[GDTF TIMER]   _createChannelParams:      {time.time()-t_cp:.3f}s')
+
+		# auto-create first fixture if none exist, then refresh display
+		t_ref = time.time()
+		if not self._fixtureInstances:
+			self.AddFixture()
+		self._refreshTargetMenu()
+		self._updateDisplayParams()
+		print(f'[GDTF TIMER]   AddFixture+refresh:        {time.time()-t_ref:.3f}s')
+
+		# # create parexec DAT to watch for parameter changes
+		# parexecOp = _createOp(parameterexecuteDAT, 'parexec_channelControl')
+		# parexecOp.par.op = self.ownerComp
+		# parexecOp.par.valuechange = True
+		# parexecOp.text = (
+		# 	"def onValueChange(par, prev):\n"
+		# 	"\text = par.owner.ext.FixtureExt\n"
+		# 	"\tif par.page.name == 'Channel Functions':\n"
+		# 	"\t\tif par.name == 'Controltarget':\n"
+		# 	"\t\t\text._onTargetChanged()\n"
+		# 	"\t\telse:\n"
+		# 	"\t\t\text._onChannelParChange(par)\n"
+		# )
+
+		# layout created operators
+		self.ownerComp.layout(self.ownerComp.findChildren(tags=[tag]))
+
+	# ── Private Helpers ─────────────────────────────────────
+
+	def _createChannelParams(self, channelTemplate: list):
+		"""Create Channel Functions page parameters from the channel template (CONSTANT mode, writable)."""
+		chFuncPage = self.ownerComp.customPages['Channel Functions']
+
+		# Control Target parameter
+		ctPar = chFuncPage.appendStrMenu('Controltarget', label='Control Target')
+		ctPar.menuNames = ['all']
+		ctPar.menuLabels = ['All']
+		ctPar.default = 'all'
+		ctPar.val = 'all'
+		ctPar.startSection = True
+
+		for ch in channelTemplate:
+			valParName = legalTdParName(ch['name'])
+			cfDicts = ch['channelFunctions']
+			firstDict = cfDicts[0] if cfDicts else None
+
+			if ch['normalized']:
+				valPar = chFuncPage.appendFloat(valParName, label=ch['name'], size=ch['components'])
+				valPar.normMin = 0
+				valPar.normMax = 1
+				valPar.min = 0
+				valPar.max = 1
+				for i in range(ch['components']):
+					valPar[i].default = tdu.remap(firstDict['default'], 0, 2 ** ch['byteCount'] - 1, 0, 1) if firstDict else 0
+					valPar[i].clampMin = True
+					valPar[i].clampMax = True
+					valPar[i].startSection = True
+					valPar[i].mode = ParMode.CONSTANT
+			else:
+				valPar = chFuncPage.appendInt(valParName, label=ch['name'])
+				valPar.normMin = 0
+				valPar.normMax = 2 ** ch['byteCount'] - 1
+				valPar.min = 0
+				valPar.max = 2 ** ch['byteCount'] - 1
+				valPar.clampMin = True
+				valPar.clampMax = True
+				valPar.startSection = True
+				valPar.mode = ParMode.CONSTANT
+
+				chFuncMenu = chFuncPage.appendMenu('{}function'.format(valParName), label='Function')
+				menuLabels = [d['name'] for d in cfDicts]
+				chFuncMenu[0].menuNames = list(range(len(menuLabels)))
+				chFuncMenu[0].menuLabels = menuLabels
+				chFuncMenu[0].mode = ParMode.CONSTANT
+
+				chFuncVal = chFuncPage.appendFloat('{}value'.format(valParName), label='Function Value')
+				chFuncVal.clampMin = True
+				chFuncVal.clampMax = True
+				chFuncVal.enable = True
+				chFuncVal.mode = ParMode.CONSTANT
+
+				chSetMenu = chFuncPage.appendMenu('{}menu'.format(valParName), label='Channel Set')
+				if firstDict and firstDict['channelSets']:
+					chSetMenu[0].menuNames = list(range(len(firstDict['channelSets'])))
+					chSetMenu[0].menuLabels = [cs['name'] for cs in firstDict['channelSets']]
+				chSetMenu[0].enable = True
+				chSetMenu[0].mode = ParMode.CONSTANT
+
+				if firstDict:
+					normMin = min(firstDict['physicalFrom'], firstDict['physicalTo'])
+					normMax = max(firstDict['physicalFrom'], firstDict['physicalTo'])
+					chFuncVal.normMin = normMin
+					chFuncVal.normMax = normMax
+					chFuncVal.min = normMin
+					chFuncVal.max = normMax
+
+		self._buildParLookup(channelTemplate)
+		self._createDmxDependencies(channelTemplate)
+
+	def _buildParLookup(self, channelTemplate: list):
+		"""Build O(1) lookup from TD parameter name to (channelName, role, componentIndex)."""
+		self._parLookup = {}
+		self._channelByName = {}
+		for ch in channelTemplate:
+			self._channelByName[ch['name']] = ch
+			parBaseName = legalTdParName(ch['name'])
+			if ch['normalized']:
+				suffixes = ['', '2', '3', '4'][:ch['components']]
+				for i, suffix in enumerate(suffixes):
+					self._parLookup[parBaseName + suffix] = (ch['name'], 'normalized', i)
+			else:
+				self._parLookup[parBaseName] = (ch['name'], 'value', 0)
+				self._parLookup[parBaseName + 'function'] = (ch['name'], 'function', 0)
+				self._parLookup[parBaseName + 'value'] = (ch['name'], 'functionvalue', 0)
+				self._parLookup[parBaseName + 'menu'] = (ch['name'], 'channelset', 0)
+
+	def _createDmxDependencies(self, channelTemplate: list):
+		"""Create a tdu.Dependency per channel from the channel template."""
+		self._dmxDeps = {}
+		for ch in channelTemplate:
+			self._dmxDeps[ch['name']] = tdu.Dependency([])
+
+		self._updateDmxDependencies()
+
+	def _updateDmxDependency(self, channelName: str):
+		"""Push current DMX values for a single channel into its dependable property."""
+		ch = self._channelByName.get(channelName)
+		if ch is None:
+			return
+		dep = self._dmxDeps.get(channelName)
+		if dep is None:
+			return
+		normalized = ch['normalized']
+		values = []
+		for fi in self._fixtureInstances:
+			channel = fi.channels.get(channelName)
+			if channel is None:
+				continue
+			if ch['components'] > 1:
+				comps = ['x', 'y', 'z', 'w'][:ch['components']]
+				if normalized:
+					values.append(tuple(float(getattr(channel.dmxValue, c)) for c in comps))
+				else:
+					values.append(tuple(int(getattr(channel.dmxValue, c)) for c in comps))
+			else:
+				if normalized:
+					values.append(float(channel.dmxValue.x))
+				else:
+					values.append(int(channel.dmxValue.x))
+		dep.val = values
+
+	def _updateDmxDependencies(self):
+		"""Push current DMX values from all fixture instances into the dependable properties."""
+		for ch in self._channelTemplate:
+			chName = ch['name']
+			dep = self._dmxDeps.get(chName)
+			if dep is None:
+				continue
+			normalized = ch['normalized']
+			maxVal = 2 ** ch['byteCount'] - 1
+			values = []
+			for fi in self._fixtureInstances:
+				channel = fi.channels.get(chName)
+				if channel is None:
+					continue
+				if ch['components'] > 1:
+					comps = ['x', 'y', 'z', 'w'][:ch['components']]
+					if normalized:
+						values.append(tuple(float(getattr(channel.dmxValue, c)) for c in comps))
+					else:
+						values.append(tuple(int(getattr(channel.dmxValue, c)) for c in comps))
+				else:
+					if normalized:
+						values.append(float(channel.dmxValue.x))
+					else:
+						values.append(int(channel.dmxValue.x))
+			dep.val = values
+
+	def _resolveTarget(self, target='all') -> List[FixtureInstance]:
+		"""Parse a target specifier into a deduplicated list of FixtureInstances.
+		target can be: int (fixtureId), 'all', group name, or comma-separated mix.
+		"""
+		if isinstance(target, int):
+			target = str(target)
+		tokens = [t.strip() for t in str(target).split(',')]
+		seen = set()
+		result = []
+		for token in tokens:
+			if token == 'all':
+				for fi in self._fixtureInstances:
+					if fi.fixtureId not in seen:
+						seen.add(fi.fixtureId)
+						result.append(fi)
+			elif token.isdigit():
+				fid = int(token)
+				for fi in self._fixtureInstances:
+					if fi.fixtureId == fid and fid not in seen:
+						seen.add(fid)
+						result.append(fi)
+						break
+			elif token in self._fixtureGroups:
+				for fid in self._fixtureGroups[token].fixtureIds:
+					for fi in self._fixtureInstances:
+						if fi.fixtureId == fid and fid not in seen:
+							seen.add(fid)
+							result.append(fi)
+							break
+		return result
+
+	def _refreshTargetMenu(self):
+		"""Rebuild the Control Target menu entries from current fixtures and groups."""
+		par = self.ownerComp.par['Controltarget']
+		if par is None:
+			return
+		names = ['all'] + [str(fi.fixtureId) for fi in self._fixtureInstances] + list(self._fixtureGroups.keys())
+		labels = ['All'] + [
+			'{} ({})'.format(fi.fixtureId, fi.label) if fi.label else str(fi.fixtureId)
+			for fi in self._fixtureInstances
+		] + list(self._fixtureGroups.keys())
+		par.menuNames = names
+		par.menuLabels = labels
+
+	def _updateDisplayParams(self):
+		myTime = time.time()
+		debug('starting display param update', myTime)
+		"""Write all channel values to the custom params (full refresh)."""
+		for ch in self._channelTemplate:
+			self._updateChannelDisplayParams(ch['name'])
+		debug('finished display param update', time.time()-myTime)
+
+	def _updateChannelDisplayParams(self, channelName: str, roles: Optional[set] = None):
+		"""Update display params for a single channel. If roles is None, update everything."""
+		ch = self._channelByName.get(channelName)
+		if ch is None:
+			return
+
+		ctPar = self.ownerComp.par['Controltarget']
+		targetStr = str(ctPar.eval()) if ctPar is not None else 'all'
+		fixtures = self._resolveTarget(targetStr)
+		if not fixtures:
+			return
+		fi = fixtures[0]
+		channel = fi.channels.get(channelName)
+		if channel is None:
+			return
+
+		parBaseName = legalTdParName(channelName)
+		self._suppressParamCallbacks = True
+		try:
+			if ch['normalized']:
+				if roles is None or 'normalized' in roles or 'value' in roles:
+					compNames = ['x', 'y', 'z', 'w'][:ch['components']]
+					suffixes = ['', '2', '3', '4']
+					for i, comp in enumerate(compNames):
+						par = self.ownerComp.par[parBaseName + suffixes[i]]
+						if par is not None:
+							par.val = getattr(channel.dmxValue, comp)
+			else:
+				if roles is None or 'value' in roles:
+					par = self.ownerComp.par[parBaseName]
+					if par is not None:
+						par.val = channel.dmxValue.x
+
+				if roles is None or 'function' in roles:
+					funcPar = self.ownerComp.par[parBaseName + 'function']
+					if funcPar is not None:
+						funcPar.val = channel.currentFunction
+
+				if roles is None or 'functionvalue' in roles:
+					valPar = self.ownerComp.par[parBaseName + 'value']
+					if valPar is not None:
+						if roles is None or 'function' in roles:
+							if channel._currentFunction:
+								physicalRange = channel._currentFunction.physicalRange
+								normMin = min(physicalRange[0].value, physicalRange[1].value)
+								normMax = max(physicalRange[0].value, physicalRange[1].value)
+								valPar.normMin = normMin
+								valPar.normMax = normMax
+								valPar.min = normMin
+								valPar.max = normMax
+						valPar.val = channel.currentFunctionValue
+
+				if roles is None or 'channelset' in roles:
+					menuPar = self.ownerComp.par[parBaseName + 'menu']
+					if menuPar is not None:
+						if roles is None or 'function' in roles:
+							if channel._currentFunction and channel._currentFunction.channelSets:
+								menuPar.menuNames = list(range(len(channel._currentFunction.channelSets)))
+								menuPar.menuLabels = [cs.name for cs in channel._currentFunction.channelSets]
+						menuPar.val = channel.currentChannelSet
+		finally:
+			self._suppressParamCallbacks = False
+		self._updateDmxDependency(channelName)
+
+	def _onTargetChanged(self):
+		"""Called when the Controltarget parameter changes."""
+		self._updateDisplayParams()
+
+	def _onChannelParChange(self, par):
+		"""Called by parexec when a channel parameter is changed by the user."""
+		if self._suppressParamCallbacks:
+			return
+
+		lookup = self._parLookup.get(par.name)
+		if lookup is None:
+			return
+
+		channelName, role, compIdx = lookup
+		ctPar = self.ownerComp.par['Controltarget']
+		targetStr = str(ctPar.eval()) if ctPar is not None else 'all'
+
+		if role == 'normalized':
+			compName = ['x', 'y', 'z', 'w'][compIdx]
+			for fi in self._resolveTarget(targetStr):
+				channel = fi.channels.get(channelName)
+				if channel:
+					setattr(channel.dmxValue, compName, par.eval())
+			self._updateChannelDisplayParams(channelName, roles={'normalized'})
+		elif role == 'value':
+			self.SetDmxValue(channelName, par.eval(), targetStr)
+		elif role == 'function':
+			self.SetFunction(channelName, int(par.eval()), targetStr)
+		elif role == 'functionvalue':
+			self.SetFunctionValue(channelName, par.eval(), targetStr)
+		elif role == 'channelset':
+			self.SetChannelSet(channelName, int(par.eval()), targetStr)
+
+	def _persistFixtures(self):
+		"""Write current fixture and group state to storage."""
+		self._fixtures = [fi.toDict() for fi in self._fixtureInstances]
+		self._groups = {n: g.toDict() for n, g in self._fixtureGroups.items()}
+
+	def _saveState(self, allChannels: list):
+		"""Serialize channel template data to storage so it survives a TD restart."""
+		channelData = []
+		for channel in allChannels:
+			channelFunctions = []
+			if channel.channelObj and hasattr(channel.channelObj, 'logical_channels'):
+				logicalChannels = channel.channelObj.logical_channels
+				if logicalChannels:
+					for cf in logicalChannels[0].channel_functions:
+						cSets = []
+						for cs in cf.channel_sets:
+							if len(cs.name):
+								cSets.append({
+									'name': cs.name,
+									'dmxFrom': cs.dmx_from.value,
+									'dmxTo': cs.dmx_to.value,
+									'physicalFrom': cs.physical_from.value,
+									'physicalTo': cs.physical_to.value,
+								})
+						channelFunctions.append({
+							'name': cf.name,
+							'dmxFrom': cf.dmx_from.value,
+							'dmxTo': cf.dmx_to.value,
+							'default': cf.default.value,
+							'physicalFrom': cf.physical_from.value,
+							'physicalTo': cf.physical_to.value,
+							'channelSets': cSets,
+						})
+			channelData.append({
+				'name': channel.name,
+				'tdChannelName': channel.tdChannelName,
+				'normalized': channel.normalized,
+				'byteCount': channel.bitDepth,
+				'components': channel.components,
+				'geoType': channel.geoType,
+				'channelFunctions': channelFunctions,
+			})
+		self._savedChannels = channelData
+		self._savedModes = [{'name': m.name, 'description': m.description} for m in self.fixture.dmxModes]
+		self._persistFixtures()
+
+	def _restoreState(self):
+		"""Reconstruct Python-side objects from stored data without reading the GDTF file."""
+		# Rebuild a lightweight fixture stub so Modes property works
+		self.fixture = TouchDesignerFixture(
+			name=self._fixtureName,
+			manufacturer=self._fixtureManufacturer,
+			attributes=[],
+			dmxModes=[DMXModeInfo(name=m['name'], description=m['description']) for m in self._savedModes],
+		)
+
+		# Reconstruct fixture instances from storage
+		self._fixtureInstances = [
+			FixtureInstance.fromDict(d, self._channelTemplate)
+			for d in self._fixtures
+		]
+
+		# Reconstruct groups from storage
+		for name, gData in self._groups.items():
+			self._fixtureGroups[name] = FixtureGroup.fromDict(gData)
+
+		# Recreate channel params and refresh display
+		self._createChannelParams(self._channelTemplate)
+		self._refreshTargetMenu()
+		self._updateDisplayParams()
+		debug('FixtureExt: state restored -', len(self._savedChannels), 'channels,',
+			  len(self._fixtureInstances), 'fixtures,', len(self._fixtureGroups), 'groups')
