@@ -449,6 +449,7 @@ class FixtureExt:
 			for c, channel in enumerate(geo.tdDmxChannels or []):
 				channel.geoGroup = groupName
 				channel.geoType = geoType
+				channel.instances = len(geo.sequentialMembers) if geo.isSequential else 1
 				channel.tdChannelName = tdu.validName(channel.name)
 				allChannels.append(channel)
 				seqItem = attrOp.seq.attr[c]
@@ -638,12 +639,16 @@ class FixtureExt:
 				suffixes = ['', '2', '3', '4'][:ch['components']]
 				for i, suffix in enumerate(suffixes):
 					self._parLookup[parBaseName + suffix] = (ch['name'], 'normalized', i)
+				# Also register 1-based name for first component (par.name returns 'Name1' not 'Name')
+				if ch['components'] > 0:
+					self._parLookup[parBaseName + '1'] = (ch['name'], 'normalized', 0)
 			else:
 				self._parLookup[parBaseName] = (ch['name'], 'value', 0)
 				self._parLookup[parBaseName + 'function'] = (ch['name'], 'function', 0)
 				self._parLookup[parBaseName + 'value'] = (ch['name'], 'functionvalue', 0)
 				self._parLookup[parBaseName + 'menu'] = (ch['name'], 'channelset', 0)
 
+	# TODO: something here fails to set an initial value for the DMX channels, investigate and fix
 	def _createDmxDependencies(self, channelTemplate: list):
 		"""Create a tdu.Dependency per channel from the channel template."""
 		self._dmxDeps = {}
@@ -653,7 +658,6 @@ class FixtureExt:
 		self._updateDmxDependencies()
 
 	def _updateDmxDependency(self, channelName: str):
-		"""Push current DMX values for a single channel into its dependable property."""
 		ch = self._channelByName.get(channelName)
 		if ch is None:
 			return
@@ -661,6 +665,7 @@ class FixtureExt:
 		if dep is None:
 			return
 		normalized = ch['normalized']
+		instances = ch.get('instances', 1)
 		values = []
 		for fi in self._fixtureInstances:
 			channel = fi.channels.get(channelName)
@@ -669,42 +674,23 @@ class FixtureExt:
 			if ch['components'] > 1:
 				comps = ['x', 'y', 'z', 'w'][:ch['components']]
 				if normalized:
-					values.append(tuple(float(getattr(channel.dmxValue, c)) for c in comps))
+					val = tuple(float(getattr(channel.dmxValue, c)) for c in comps)
 				else:
-					values.append(tuple(int(getattr(channel.dmxValue, c)) for c in comps))
+					val = tuple(int(getattr(channel.dmxValue, c)) for c in comps)
 			else:
 				if normalized:
-					values.append(float(channel.dmxValue.x))
+					val = float(channel.dmxValue.x)
 				else:
-					values.append(int(channel.dmxValue.x))
+					val = int(channel.dmxValue.x)
+			if instances > 1:
+				values.append([val] * instances)
+			else:
+				values.append(val)
 		dep.val = values
 
 	def _updateDmxDependencies(self):
-		"""Push current DMX values from all fixture instances into the dependable properties."""
 		for ch in self._channelTemplate:
-			chName = ch['name']
-			dep = self._dmxDeps.get(chName)
-			if dep is None:
-				continue
-			normalized = ch['normalized']
-			maxVal = 2 ** ch['byteCount'] - 1
-			values = []
-			for fi in self._fixtureInstances:
-				channel = fi.channels.get(chName)
-				if channel is None:
-					continue
-				if ch['components'] > 1:
-					comps = ['x', 'y', 'z', 'w'][:ch['components']]
-					if normalized:
-						values.append(tuple(float(getattr(channel.dmxValue, c)) for c in comps))
-					else:
-						values.append(tuple(int(getattr(channel.dmxValue, c)) for c in comps))
-				else:
-					if normalized:
-						values.append(float(channel.dmxValue.x))
-					else:
-						values.append(int(channel.dmxValue.x))
-			dep.val = values
+			self._updateDmxDependency(ch['name'])
 
 	def _resolveTarget(self, target='all') -> List[FixtureInstance]:
 		"""Parse a target specifier into a deduplicated list of FixtureInstances.
@@ -895,6 +881,7 @@ class FixtureExt:
 				'byteCount': channel.bitDepth,
 				'components': channel.components,
 				'geoType': channel.geoType,
+				'instances': channel.instances,
 				'channelFunctions': channelFunctions,
 			})
 		self._savedChannels = channelData
