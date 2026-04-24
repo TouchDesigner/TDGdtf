@@ -246,7 +246,10 @@ class FixtureExt:
 	def Modes(self, value):
 		self._modes = value.menuIndex
 		mode = self.fixture.dmxModes[self._modes]
-		self.CreateNetwork(dmxMode=mode)
+		if mode.tdGeometries is None:
+			self.Parse(modeIndex=self._modes)
+		else:
+			self.CreateNetwork(dmxMode=mode)
 
 	# ── Fixture Management (promoted) ───────────────────────
 
@@ -349,7 +352,7 @@ class FixtureExt:
 
 	# ── Parsing & Network Creation ──────────────────────────
 
-	def Parse(self):
+	def Parse(self, modeIndex: int = 0):
 		t0 = time.time()
 		print(f'[GDTF TIMER] === Parse start ===')
 		parser = GDTFParser()
@@ -360,8 +363,9 @@ class FixtureExt:
 		self._modeMenu = tdu.ParMenu(menuNames, menuLabels=menuNames)
 		self._fixtureName = fixture.name
 		self._fixtureManufacturer = fixture.manufacturer
+		modeIndex = max(0, min(modeIndex, len(fixture.dmxModes) - 1))
 		print(f'[GDTF TIMER] CreateNetwork start:          {time.time()-t0:.3f}s')
-		self.CreateNetwork(fixture.dmxModes[0], myTime=t0)
+		self.CreateNetwork(fixture.dmxModes[modeIndex], myTime=t0)
 		print(f'[GDTF TIMER] === Parse complete:            {time.time()-t0:.3f}s ===')
 
 	def CreateNetwork(self, dmxMode: Optional[DMXModeInfo] = None, myTime: float = 0):
@@ -505,7 +509,7 @@ class FixtureExt:
 
 		print(f'[GDTF TIMER]   merge/combine wired:       {time.time()-myTime:.3f}s')
 		# create all dmx channels in fixture
-		fixtureOp.seq.dmxchan.numBlocks = len(allChannels)
+		fixtureOp.seq.dmxchan.numBlocks = max(1, len(allChannels))
 		allChannels.sort(key=lambda channel: channel.dmxOffset[0])
 		for c, channel in enumerate(allChannels):
 			seqItem = fixtureOp.seq.dmxchan[c]
@@ -531,10 +535,9 @@ class FixtureExt:
 		self._createChannelParams(self._channelTemplate)
 		print(f'[GDTF TIMER]   _createChannelParams:      {time.time()-t_cp:.3f}s')
 
-		# auto-create first fixture if none exist, then refresh display
+		# rebuild or create fixture instances against the new template, then refresh display
 		t_ref = time.time()
-		if not self._fixtureInstances:
-			self.AddFixture()
+		self._rebuildFixtureInstances()
 		self._refreshTargetMenu()
 		self._updateDisplayParams()
 		print(f'[GDTF TIMER]   AddFixture+refresh:        {time.time()-t_ref:.3f}s')
@@ -648,7 +651,27 @@ class FixtureExt:
 				self._parLookup[parBaseName + 'value'] = (ch['name'], 'functionvalue', 0)
 				self._parLookup[parBaseName + 'menu'] = (ch['name'], 'channelset', 0)
 
-	# TODO: something here fails to set an initial value for the DMX channels, investigate and fix
+	def _rebuildFixtureInstances(self):
+		"""Rebuild fi.channels for all existing instances against the current template.
+		Preserves values for channels present in both old and new templates.
+		If no instances exist, creates the default first fixture.
+		"""
+		if not self._fixtureInstances:
+			self.AddFixture()
+			return
+		rebuilt = []
+		for fi in self._fixtureInstances:
+			old_channels = fi.channels
+			new_fi = FixtureInstance(fi.fixtureId, fi.label, self._channelTemplate)
+			for name, new_ch in new_fi.channels.items():
+				old_ch = old_channels.get(name)
+				if old_ch:
+					new_ch.restoreValues(old_ch.toDict())
+			rebuilt.append(new_fi)
+		self._fixtureInstances = rebuilt
+		self._persistFixtures()
+		self._updateDmxDependencies()
+
 	def _createDmxDependencies(self, channelTemplate: list):
 		"""Create a tdu.Dependency per channel from the channel template."""
 		self._dmxDeps = {}
@@ -674,12 +697,14 @@ class FixtureExt:
 			if ch['components'] > 1:
 				comps = ['x', 'y', 'z', 'w'][:ch['components']]
 				if normalized:
-					val = tuple(float(getattr(channel.dmxValue, c)) for c in comps)
+					scale = 2 ** ch['byteCount'] - 1
+					val = tuple(float(getattr(channel.dmxValue, c)) / scale for c in comps)
 				else:
 					val = tuple(int(getattr(channel.dmxValue, c)) for c in comps)
 			else:
 				if normalized:
-					val = float(channel.dmxValue.x)
+					scale = 2 ** ch['byteCount'] - 1
+					val = float(channel.dmxValue.x) / scale
 				else:
 					val = int(channel.dmxValue.x)
 			if instances > 1:
@@ -770,7 +795,8 @@ class FixtureExt:
 					for i, comp in enumerate(compNames):
 						par = self.ownerComp.par[parBaseName + suffixes[i]]
 						if par is not None:
-							par.val = getattr(channel.dmxValue, comp)
+							scale = 2 ** ch['byteCount'] - 1
+							par.val = getattr(channel.dmxValue, comp) / scale
 			else:
 				if roles is None or 'value' in roles:
 					par = self.ownerComp.par[parBaseName]
@@ -830,7 +856,7 @@ class FixtureExt:
 			for fi in self._resolveTarget(targetStr):
 				channel = fi.channels.get(channelName)
 				if channel:
-					setattr(channel.dmxValue, compName, par.eval())
+					setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.byteCount - 1))
 			self._updateChannelDisplayParams(channelName, roles={'normalized'})
 		elif role == 'value':
 			self.SetDmxValue(channelName, par.eval(), targetStr)
