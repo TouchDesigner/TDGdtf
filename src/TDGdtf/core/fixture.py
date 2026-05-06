@@ -1,3 +1,4 @@
+"""Data classes representing a parsed GDTF fixture for use in TouchDesigner."""
 import pygdtf
 from dataclasses import dataclass
 from typing import List, Any, Optional, TypedDict
@@ -13,6 +14,8 @@ class BitDepth(IntEnum):
 
 
 class GeoData(TypedDict):
+    """Intermediate grouping of a geometry and its raw GDTF DMX channels."""
+
     geo: pygdtf.Geometry
     geoParent: pygdtf.Geometry
     channels: List[pygdtf.DmxChannel]
@@ -69,12 +72,20 @@ class _ScalarValue:
         self.value = value
 
 class DMXChannelSet:
+    """A named range within a channel function mapping DMX bytes to a physical value span."""
+
     def __init__(self, channelSet: pygdtf.ChannelSet):
+        """Build from a live pygdtf ChannelSet object.
+
+        Args:
+            channelSet: pygdtf ChannelSet to read name and DMX/physical ranges from.
+        """
         self.name = channelSet.name
         self.dmxRange = (channelSet.dmx_from, channelSet.dmx_to)
         self.physicalRange = (channelSet.physical_from, channelSet.physical_to)
     
     def toDict(self) -> dict:
+        """Serialise to a plain dict for storage."""
         return {
             'name': self.name,
             'dmxFrom': self.dmxRange[0].value,
@@ -85,14 +96,26 @@ class DMXChannelSet:
 
     @classmethod
     def fromDict(cls, d: dict) -> 'DMXChannelSet':
+        """Reconstruct from a plain dict as produced by toDict.
+
+        Args:
+            d: dict from toDict.
+        """
         obj = object.__new__(cls)
         obj.name = d['name']
         obj.dmxRange = (_ScalarValue(d['dmxFrom']), _ScalarValue(d['dmxTo']))
         obj.physicalRange = (_ScalarValue(d['physicalFrom']), _ScalarValue(d['physicalTo']))
         return obj
-        
+
 class DMXChannelFunction:
+    """One functional range of a logical DMX channel (e.g. 'Dimmer' 0-255)."""
+
     def __init__(self, channelFunction: pygdtf.ChannelFunction):
+        """Build from a live pygdtf ChannelFunction object.
+
+        Args:
+            channelFunction: pygdtf ChannelFunction to read ranges and channel sets from.
+        """
 
         def _loadChannelSets():
             cSets = []
@@ -118,6 +141,7 @@ class DMXChannelFunction:
         self._value = value
 
     def toDict(self) -> dict:
+        """Serialise to a plain dict for storage."""
         return {
             'name': self.name,
             'dmxFrom': self.dmxRange[0].value,
@@ -130,6 +154,11 @@ class DMXChannelFunction:
 
     @classmethod
     def fromDict(cls, d: dict) -> 'DMXChannelFunction':
+        """Reconstruct from a plain dict as produced by toDict.
+
+        Args:
+            d: dict from toDict.
+        """
         obj = object.__new__(cls)
         obj.name = d['name']
         obj.dmxRange = (_ScalarValue(d['dmxFrom']), _ScalarValue(d['dmxTo']))
@@ -141,7 +170,18 @@ class DMXChannelFunction:
 
 
 class DMXValue:
+    """Four-component raw DMX value (x/y/z/w) with an optional change callback."""
+
     def __init__(self, x: float, y: float = 0, z: float = 0, w: float = 0, callback=None):
+        """Initialise with raw DMX component values.
+
+        Args:
+            x: Primary DMX component (always used).
+            y: Second component for 16-bit or wider channels.
+            z: Third component for 24-bit or wider channels.
+            w: Fourth component for 32-bit channels.
+            callback: Called with this DMXValue instance on any component write.
+        """
         self._x = x
         self._y = y
         self._z = z

@@ -1,4 +1,4 @@
-"""
+﻿"""
 Extension classes enhance TouchDesigner components with python. An
 extension is accessed via ext.ExtensionClassName from any operator
 within the extended component. If the extension is promoted via its
@@ -12,11 +12,18 @@ import pygdtf
 from typing import Dict, List, Any, Optional, Tuple
 import time
 
-from TDGdtf.fixture import DMXChannelSet, DMXChannelFunction, DMXValue, DMXModeInfo, TDDMXChannel, _ScalarValue, TouchDesignerFixture
-from TDGdtf.parser import GDTFParser
-from TDGdtf.utils import legalTdParName
+from TDGdtf.core.fixture import DMXChannelSet, DMXChannelFunction, DMXValue, DMXModeInfo, TDDMXChannel, _ScalarValue, TouchDesignerFixture
+from TDGdtf.core.parser import GDTFParser
+from TDGdtf.core.utils import legalTdParName
 
 tag = 'GDTFPARSER'
+
+
+def _chUniqueKey(ch: dict) -> str:
+	"""Internal storage key for a channel: geoGroup_tdChannelName, or tdChannelName when no group."""
+	geoGroup = ch.get('geoGroup')
+	base = ch.get('tdChannelName') or ch.get('name', '')
+	return '{}_{}'.format(geoGroup, base) if geoGroup else base
 
 
 class DMXLogicalChannel:
@@ -24,6 +31,12 @@ class DMXLogicalChannel:
 	No TouchDesigner operator references — all parameter UI is handled by FixtureExt.
 	"""
 	def __init__(self, name: str, channelFunctionDicts: list, normalized: bool, byteCount: int = 8, components: int = 1):
+		"""Set up channel functions and default DMX value from stored data.
+
+		Args:
+			channelFunctionDicts: List of dicts as produced by _saveState.
+			byteCount: Bit depth of the channel (8, 16, 24, or 32).
+		"""
 		self.name = name
 		self.normalized = normalized
 		self.byteCount = byteCount
@@ -139,11 +152,16 @@ class DMXLogicalChannel:
 class FixtureInstance:
 	"""One logical fixture instance with its own set of DMX channel values."""
 	def __init__(self, fixtureId: int, label: str, channelTemplate: list):
+		"""Create a fixture instance with channels seeded from the template.
+
+		Args:
+			channelTemplate: List of channel dicts from _savedChannels.
+		"""
 		self.fixtureId = fixtureId
 		self.label = label
 		self.channels: Dict[str, DMXLogicalChannel] = {}
 		for ch in channelTemplate:
-			self.channels[ch['name']] = DMXLogicalChannel(
+			self.channels[_chUniqueKey(ch)] = DMXLogicalChannel(
 				name=ch['name'],
 				channelFunctionDicts=ch['channelFunctions'],
 				normalized=ch['normalized'],
@@ -152,27 +170,48 @@ class FixtureInstance:
 			)
 
 	def setDmxValue(self, channelName: str, value):
+		"""Set the raw DMX x-component of a channel.
+
+		Args:
+			value: Raw integer DMX value (0 to 2^bitDepth-1).
+		"""
 		ch = self.channels.get(channelName)
 		if ch:
 			ch.dmxValue = DMXValue(value, ch.dmxValue.y, ch.dmxValue.z, ch.dmxValue.w,
 								   callback=ch._dmxValueChanged)
 
 	def setFunction(self, channelName: str, functionIndex: int):
+		"""Switch the active channel function.
+
+		Args:
+			functionIndex: 0-based index into the channel's channelFunctions list.
+		"""
 		ch = self.channels.get(channelName)
 		if ch:
 			ch.currentFunction = functionIndex
 
 	def setFunctionValue(self, channelName: str, value: float):
+		"""Set a physical function value (mapped from physical range to DMX).
+
+		Args:
+			value: Physical value within the current function's physical range.
+		"""
 		ch = self.channels.get(channelName)
 		if ch:
 			ch.currentFunctionValue = value
 
 	def setChannelSet(self, channelName: str, channelSetIndex: int):
+		"""Jump to the start DMX value of a named channel set.
+
+		Args:
+			channelSetIndex: 0-based index into the current function's channel sets.
+		"""
 		ch = self.channels.get(channelName)
 		if ch:
 			ch.currentChannelSet = channelSetIndex
 
 	def toDict(self) -> dict:
+		"""Serialise all channel runtime state to a plain dict."""
 		return {
 			'fixtureId': self.fixtureId,
 			'label': self.label,
@@ -181,6 +220,12 @@ class FixtureInstance:
 
 	@classmethod
 	def fromDict(cls, d: dict, channelTemplate: list) -> 'FixtureInstance':
+		"""Reconstruct a FixtureInstance from stored state.
+
+		Args:
+			d: Dict from toDict.
+			channelTemplate: Current channel template for seeding default values.
+		"""
 		inst = cls(d['fixtureId'], d['label'], channelTemplate)
 		for name, chState in d.get('channels', {}).items():
 			if name in inst.channels:
@@ -195,18 +240,24 @@ class FixtureGroup:
 		self.fixtureIds = list(fixtureIds)
 
 	def toDict(self) -> dict:
+		"""Serialise to a plain dict for storage."""
 		return {'name': self.name, 'fixtureIds': self.fixtureIds}
 
 	@classmethod
 	def fromDict(cls, d: dict) -> 'FixtureGroup':
+		"""Reconstruct from a plain dict as produced by toDict.
+
+		Args:
+			d: Dict from toDict.
+		"""
 		return cls(d['name'], d['fixtureIds'])
 
 
 class FixtureExt:
-	"""
-	FixtureExt description
-	"""
+	"""TouchDesigner COMP extension that parses a GDTF file, builds a POP network, and manages DMX fixture instances."""
+
 	def __init__(self, ownerComp):
+		"""Initialise storage, restore persisted state if available."""
 		self.ownerComp = ownerComp
 		self.fixture = None
 		self._modes = 0
@@ -219,7 +270,6 @@ class FixtureExt:
 			{'name': '_savedModes', 'default': []},
 			{'name': '_fixtures', 'default': []},
 			{'name': '_groups', 'default': {}},
-			{'name': '_nextFixtureId', 'default': 0},
 		]
 
 		self.stored = StorageManager(self, ownerComp, storedItems)
@@ -228,6 +278,7 @@ class FixtureExt:
 		self._fixtureGroups: Dict[str, FixtureGroup] = {}
 		self._channelTemplate: list = []
 		self._channelByName: Dict[str, dict] = {}
+		self._chsByAttrName: Dict[str, list] = {}
 		self._parLookup: Dict[str, Tuple[str, str, int]] = {}
 		self._dmxDeps: Dict[str, Any] = {}
 		self._suppressParamCallbacks = False
@@ -240,10 +291,16 @@ class FixtureExt:
 
 	@property
 	def Modes(self):
+		"""Currently active DMXModeInfo."""
 		return self.fixture.dmxModes[self._modes]
 
 	@Modes.setter
 	def Modes(self, value):
+		"""Switch to a different DMX mode, parsing the file first if needed.
+
+		Args:
+			value: TD menu parameter value (uses .menuIndex to select the mode).
+		"""
 		self._modes = value.menuIndex
 		mode = self.fixture.dmxModes[self._modes]
 		if mode.tdGeometries is None:
@@ -254,9 +311,11 @@ class FixtureExt:
 	# ── Fixture Management (promoted) ───────────────────────
 
 	def AddFixture(self, label: str = '') -> int:
-		"""Create a new fixture instance. Returns its auto-incremented ID."""
-		fid = self._nextFixtureId
-		self._nextFixtureId = fid + 1
+		"""Create a new fixture instance. Returns its ID (lowest available integer)."""
+		usedIds = {fi.fixtureId for fi in self._fixtureInstances}
+		fid = 0
+		while fid in usedIds:
+			fid += 1
 		fi = FixtureInstance(fid, label, self._channelTemplate)
 		self._fixtureInstances.append(fi)
 		self._refreshTargetMenu()
@@ -295,11 +354,37 @@ class FixtureExt:
 
 	@property
 	def DmxChannelsByType(self) -> dict:
-		"""Dict with 'point' and 'primitive' keys, each containing a list of channel names."""
+		"""Dict with 'point' and 'primitive' keys, each a deduplicated list of attribute names."""
 		result = {'point': [], 'primitive': []}
+		seen = set()
 		for ch in self._channelTemplate:
-			geoType = ch.get('geoType', 'primitive')
-			result[geoType].append(ch['name'])
+			attrName = ch['name']
+			if attrName not in seen:
+				seen.add(attrName)
+				result[ch.get('geoType', 'primitive')].append(attrName)
+		return result
+
+	def GetDmxChannelValues(self, channelName: str) -> list:
+		"""Return a flat list of DMX values for a channel across all groups and fixtures.
+
+		Handles all dep.val shapes:
+		  - dict  {geoGroup: [fixtureVals]} — multi-group: groups concatenated in dict order
+		  - list  [fixtureVals]             — single-group sequential or primitive
+		Each fixtureVal is a scalar (float/int), a list of instance values, or a tuple
+		for multi-component channels (RGBA).
+		"""
+		dep = self._dmxDeps.get(channelName)
+		if dep is None:
+			return []
+		val = dep.val
+		groups = val.values() if isinstance(val, dict) else [val]
+		result = []
+		for groupVals in groups:
+			for fiVal in groupVals:
+				if isinstance(fiVal, list):
+					result.extend(fiVal)
+				else:
+					result.append(fiVal)
 		return result
 
 	# ── Group Management (promoted) ─────────────────────────
@@ -327,32 +412,51 @@ class FixtureExt:
 	# ── Value Setters (promoted) ────────────────────────────
 
 	def SetDmxValue(self, channelName: str, value, target='all'):
-		"""Set raw DMX value on a channel for the given target(s)."""
+		"""Set raw DMX value on a channel for the given target(s).
+		channelName may be an attribute name (updates all groups) or a uniqueName (one group).
+		"""
+		unames, attrName = self._resolveChannel(channelName)
 		for fi in self._resolveTarget(target):
-			fi.setDmxValue(channelName, value)
-		self._updateChannelDisplayParams(channelName, roles={'value'})
+			for uname in unames:
+				fi.setDmxValue(uname, value)
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName, roles={'value'})
 
 	def SetFunction(self, channelName: str, functionIndex: int, target='all'):
 		"""Set the active channel function by index for the given target(s)."""
+		unames, attrName = self._resolveChannel(channelName)
 		for fi in self._resolveTarget(target):
-			fi.setFunction(channelName, functionIndex)
-		self._updateChannelDisplayParams(channelName)
+			for uname in unames:
+				fi.setFunction(uname, functionIndex)
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName)
 
 	def SetFunctionValue(self, channelName: str, value: float, target='all'):
 		"""Set a physical function value for the given target(s)."""
+		unames, attrName = self._resolveChannel(channelName)
 		for fi in self._resolveTarget(target):
-			fi.setFunctionValue(channelName, value)
-		self._updateChannelDisplayParams(channelName, roles={'value', 'functionvalue'})
+			for uname in unames:
+				fi.setFunctionValue(uname, value)
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName, roles={'value', 'functionvalue'})
 
 	def SetChannelSet(self, channelName: str, channelSetIndex: int, target='all'):
 		"""Set the active channel set by index for the given target(s)."""
+		unames, attrName = self._resolveChannel(channelName)
 		for fi in self._resolveTarget(target):
-			fi.setChannelSet(channelName, channelSetIndex)
-		self._updateChannelDisplayParams(channelName, roles={'value', 'channelset'})
+			for uname in unames:
+				fi.setChannelSet(uname, channelSetIndex)
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName, roles={'value', 'channelset'})
 
 	# ── Parsing & Network Creation ──────────────────────────
 
 	def Parse(self, modeIndex: int = 0):
+		"""Parse the GDTF file and build the POP network for the selected mode.
+
+		Args:
+			modeIndex: 0-based index into fixture.dmxModes; clamped to valid range.
+		"""
 		t0 = time.time()
 		print(f'[GDTF TIMER] === Parse start ===')
 		parser = GDTFParser()
@@ -561,6 +665,22 @@ class FixtureExt:
 
 	# ── Private Helpers ─────────────────────────────────────
 
+	def _resolveChannel(self, channelName: str):
+		"""Return (uniqueNames, attrName) for a given attrName or uniqueName.
+
+		If channelName is an attribute name (key in _chsByAttrName), returns all uniqueNames
+		for all geometry groups sharing that attribute, plus the attrName itself.
+		If channelName is a uniqueName, returns [channelName] and resolves the attrName.
+		"""
+		if channelName in self._chsByAttrName:
+			unames = [_chUniqueKey(ch) for ch in self._chsByAttrName[channelName]]
+			return unames, channelName
+		# uniqueName passed directly — find attrName by scanning template
+		for ch in self._channelTemplate:
+			if _chUniqueKey(ch) == channelName:
+				return [channelName], ch['name']
+		return [channelName], channelName
+
 	def _createChannelParams(self, channelTemplate: list):
 		"""Create Channel Functions page parameters from the channel template (CONSTANT mode, writable)."""
 		chFuncPage = self.ownerComp.customPages['Channel Functions']
@@ -573,8 +693,13 @@ class FixtureExt:
 		ctPar.val = 'all'
 		ctPar.startSection = True
 
+		seen = set()
 		for ch in channelTemplate:
-			valParName = legalTdParName(ch['name'])
+			attrName = ch['name']
+			if attrName in seen:
+				continue
+			seen.add(attrName)
+			valParName = legalTdParName(attrName)
 			cfDicts = ch['channelFunctions']
 			firstDict = cfDicts[0] if cfDicts else None
 
@@ -632,24 +757,29 @@ class FixtureExt:
 		self._createDmxDependencies(channelTemplate)
 
 	def _buildParLookup(self, channelTemplate: list):
-		"""Build O(1) lookup from TD parameter name to (channelName, role, componentIndex)."""
+		"""Build O(1) lookup from TD parameter name to (attrName, role, componentIndex)."""
 		self._parLookup = {}
 		self._channelByName = {}
+		self._chsByAttrName = {}
 		for ch in channelTemplate:
-			self._channelByName[ch['name']] = ch
-			parBaseName = legalTdParName(ch['name'])
+			attrName = ch['name']
+			self._channelByName.setdefault(attrName, ch)  # first group wins for display
+			self._chsByAttrName.setdefault(attrName, []).append(ch)
+			# Only build parLookup entries for the first occurrence per attrName
+			if legalTdParName(attrName) in self._parLookup:
+				continue
+			parBaseName = legalTdParName(attrName)
 			if ch['normalized']:
 				suffixes = ['', '2', '3', '4'][:ch['components']]
 				for i, suffix in enumerate(suffixes):
-					self._parLookup[parBaseName + suffix] = (ch['name'], 'normalized', i)
-				# Also register 1-based name for first component (par.name returns 'Name1' not 'Name')
+					self._parLookup[parBaseName + suffix] = (attrName, 'normalized', i)
 				if ch['components'] > 0:
-					self._parLookup[parBaseName + '1'] = (ch['name'], 'normalized', 0)
+					self._parLookup[parBaseName + '1'] = (attrName, 'normalized', 0)
 			else:
-				self._parLookup[parBaseName] = (ch['name'], 'value', 0)
-				self._parLookup[parBaseName + 'function'] = (ch['name'], 'function', 0)
-				self._parLookup[parBaseName + 'value'] = (ch['name'], 'functionvalue', 0)
-				self._parLookup[parBaseName + 'menu'] = (ch['name'], 'channelset', 0)
+				self._parLookup[parBaseName] = (attrName, 'value', 0)
+				self._parLookup[parBaseName + 'function'] = (attrName, 'function', 0)
+				self._parLookup[parBaseName + 'value'] = (attrName, 'functionvalue', 0)
+				self._parLookup[parBaseName + 'menu'] = (attrName, 'channelset', 0)
 
 	def _rebuildFixtureInstances(self):
 		"""Rebuild fi.channels for all existing instances against the current template.
@@ -673,49 +803,76 @@ class FixtureExt:
 		self._updateDmxDependencies()
 
 	def _createDmxDependencies(self, channelTemplate: list):
-		"""Create a tdu.Dependency per channel from the channel template."""
+		"""Create one tdu.Dependency per unique attribute name.
+		Multi-group channels (same attr in multiple geoGroups) get a dict-valued dep.
+		"""
 		self._dmxDeps = {}
 		for ch in channelTemplate:
-			self._dmxDeps[ch['name']] = tdu.Dependency([])
+			attrName = ch['name']
+			if attrName not in self._dmxDeps:
+				multiGroup = len(self._chsByAttrName.get(attrName, [])) > 1
+				self._dmxDeps[attrName] = tdu.Dependency({} if multiGroup else [])
 
 		self._updateDmxDependencies()
 
 	def _updateDmxDependency(self, channelName: str):
-		ch = self._channelByName.get(channelName)
-		if ch is None:
-			return
+		"""Recompute dep.val for a single attribute name across all geoGroups and fixture instances.
+
+		For multi-group channels dep.val is {geoGroup: [values_per_fixture]}.
+		For single-group channels dep.val is [values_per_fixture] (unchanged format).
+		"""
 		dep = self._dmxDeps.get(channelName)
 		if dep is None:
 			return
-		normalized = ch['normalized']
-		instances = ch.get('instances', 1)
-		values = []
-		for fi in self._fixtureInstances:
-			channel = fi.channels.get(channelName)
-			if channel is None:
-				continue
+		chList = self._chsByAttrName.get(channelName, [])
+		if not chList:
+			return
+		multiGroup = len(chList) > 1
+
+		def _extractVal(channel, ch):
+			normalized = ch['normalized']
 			if ch['components'] > 1:
 				comps = ['x', 'y', 'z', 'w'][:ch['components']]
 				if normalized:
 					scale = 2 ** ch['byteCount'] - 1
-					val = tuple(float(getattr(channel.dmxValue, c)) / scale for c in comps)
-				else:
-					val = tuple(int(getattr(channel.dmxValue, c)) for c in comps)
-			else:
-				if normalized:
-					scale = 2 ** ch['byteCount'] - 1
-					val = float(channel.dmxValue.x) / scale
-				else:
-					val = int(channel.dmxValue.x)
-			if instances > 1:
-				values.append([val] * instances)
-			else:
-				values.append(val)
-		dep.val = values
+					return tuple(float(getattr(channel.dmxValue, c)) / scale for c in comps)
+				return tuple(int(getattr(channel.dmxValue, c)) for c in comps)
+			if normalized:
+				scale = 2 ** ch['byteCount'] - 1
+				return float(channel.dmxValue.x) / scale
+			return int(channel.dmxValue.x)
+
+		if multiGroup:
+			result = {}
+			for ch in chList:
+				uname = _chUniqueKey(ch)
+				instances = ch.get('instances', 1)
+				groupValues = []
+				for fi in self._fixtureInstances:
+					channel = fi.channels.get(uname)
+					if channel is None:
+						continue
+					val = _extractVal(channel, ch)
+					groupValues.append([val] * instances if instances > 1 else val)
+				result[ch.get('geoGroup')] = groupValues
+			dep.val = result
+		else:
+			ch = chList[0]
+			uname = _chUniqueKey(ch)
+			instances = ch.get('instances', 1)
+			values = []
+			for fi in self._fixtureInstances:
+				channel = fi.channels.get(uname)
+				if channel is None:
+					continue
+				val = _extractVal(channel, ch)
+				values.append([val] * instances if instances > 1 else val)
+			dep.val = values
 
 	def _updateDmxDependencies(self):
-		for ch in self._channelTemplate:
-			self._updateDmxDependency(ch['name'])
+		"""Recompute dep.val for every unique attribute name."""
+		for attrName in self._dmxDeps:
+			self._updateDmxDependency(attrName)
 
 	def _resolveTarget(self, target='all') -> List[FixtureInstance]:
 		"""Parse a target specifier into a deduplicated list of FixtureInstances.
@@ -765,8 +922,12 @@ class FixtureExt:
 		myTime = time.time()
 		debug('starting display param update', myTime)
 		"""Write all channel values to the custom params (full refresh)."""
+		seen = set()
 		for ch in self._channelTemplate:
-			self._updateChannelDisplayParams(ch['name'])
+			attrName = ch['name']
+			if attrName not in seen:
+				seen.add(attrName)
+				self._updateChannelDisplayParams(attrName)
 		debug('finished display param update', time.time()-myTime)
 
 	def _updateChannelDisplayParams(self, channelName: str, roles: Optional[set] = None):
@@ -781,7 +942,9 @@ class FixtureExt:
 		if not fixtures:
 			return
 		fi = fixtures[0]
-		channel = fi.channels.get(channelName)
+		# fi.channels is keyed by uniqueName; look up the first group's uniqueName for this attr
+		uname = _chUniqueKey(ch)
+		channel = fi.channels.get(uname)
 		if channel is None:
 			return
 
@@ -853,11 +1016,14 @@ class FixtureExt:
 
 		if role == 'normalized':
 			compName = ['x', 'y', 'z', 'w'][compIdx]
+			unames, attrName = self._resolveChannel(channelName)
 			for fi in self._resolveTarget(targetStr):
-				channel = fi.channels.get(channelName)
-				if channel:
-					setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.byteCount - 1))
-			self._updateChannelDisplayParams(channelName, roles={'normalized'})
+				for uname in unames:
+					channel = fi.channels.get(uname)
+					if channel:
+						setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.byteCount - 1))
+			self._updateDmxDependency(attrName)
+			self._updateChannelDisplayParams(attrName, roles={'normalized'})
 		elif role == 'value':
 			self.SetDmxValue(channelName, par.eval(), targetStr)
 		elif role == 'function':
@@ -903,6 +1069,11 @@ class FixtureExt:
 			channelData.append({
 				'name': channel.name,
 				'tdChannelName': channel.tdChannelName,
+				'geoGroup': channel.geoGroup,
+				'uniqueName': _chUniqueKey({
+					'geoGroup': channel.geoGroup,
+					'tdChannelName': channel.tdChannelName,
+				}),
 				'normalized': channel.normalized,
 				'byteCount': channel.bitDepth,
 				'components': channel.components,
@@ -916,6 +1087,13 @@ class FixtureExt:
 
 	def _restoreState(self):
 		"""Reconstruct Python-side objects from stored data without reading the GDTF file."""
+		# Migrate old stored templates that predate geoGroup/uniqueName fields
+		for ch in self._channelTemplate:
+			if 'geoGroup' not in ch:
+				ch['geoGroup'] = None
+			if 'uniqueName' not in ch:
+				ch['uniqueName'] = _chUniqueKey(ch)
+
 		# Rebuild a lightweight fixture stub so Modes property works
 		self.fixture = TouchDesignerFixture(
 			name=self._fixtureName,

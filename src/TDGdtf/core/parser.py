@@ -1,3 +1,4 @@
+"""GDTF file parser that converts a fixture definition into TouchDesigner-ready data structures."""
 import pygdtf
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from .utils import SEQNUMPATTERN, SEQNAMEPATTERN
 
 
 class GDTFParser:
+    """Parses a GDTF file into a TouchDesignerFixture with geometry and DMX channel data."""
 
     def __init__(self):
         self._fixture: Optional[pygdtf.FixtureType] = None
@@ -45,6 +47,11 @@ class GDTFParser:
         )
 
     def _parseDMXModes(self, gdtf: pygdtf.FixtureType) -> List[DMXModeInfo]:
+        """Build a DMXModeInfo stub for every mode in the fixture.
+
+        Args:
+            gdtf: Parsed pygdtf FixtureType to iterate modes from.
+        """
         modes = []
         for i in gdtf.dmx_modes:
             t = time.time()
@@ -176,4 +183,9 @@ class GDTFParser:
         return channel
 
     def _getAttributeByName(self, name: str) -> Optional[pygdtf.Attribute]:
+        """Look up a GDTF attribute by name from the pre-built index.
+
+        Args:
+            name: The GDTF attribute name string (e.g. 'Dimmer', 'ColorAdd_R').
+        """
         return self._attrByName.get(name)

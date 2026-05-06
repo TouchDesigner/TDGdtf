@@ -1,7 +1,8 @@
+"""Shared regex patterns and TD parameter name utilities."""
 import re
 
-SEQNUMPATTERN = re.compile(r'_?\d+$')
-SEQNAMEPATTERN = re.compile(r'_(\d+)')
+SEQNUMPATTERN = re.compile(r'_?\d+$')   # trailing sequence number, e.g. "Beam_3" → strips "_3"
+SEQNAMEPATTERN = re.compile(r'_(\d+)')  # embedded sequence number, e.g. "Beam_3_Color" → strips "_3"
 
 
 def legalTdParName(name: str) -> str:
