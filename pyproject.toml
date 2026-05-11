@@ -1,22 +1,63 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=82.0.1", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "TDGdtf"
-version = "0.1.0"
-description = "TDGdtf"
+version = "0.1.10"
+description = "GDTF fixture parser and TouchDesigner component builder"
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-    "pygdtf"
+requires-python = ">=3.11,<3.12"
+license-files = ["LICENSE"]
+keywords = ["touchdesigner", "gdtf", "dmx", "lighting", "fixture", "derivative"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+]
+dependencies = ["pygdtf"]
+
+[project.urls]
+Repository = "https://gitlab2.derivative.ca/Derivative/TDGdtf"
+Issues = "https://gitlab2.derivative.ca/Derivative/TDGdtf/-/issues"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2.2",
+  "twine>=5.1.1",
+  "pytest>=8.0.0",
 ]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.package-data]
+TDGdtf = [
+  "*.tox",
+  "td/*",
+  "td/**/*",
+  "assets/*",
+  "assets/**/*",
+]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.py[cod]", "__pycache__/*"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["TDGdtf*"]
+exclude = [
+  "TDGdtf.td",
+  "TDGdtf.td.*",
+  "*.__pycache__",
+  "*.__pycache__.*",
+]
+
+[tool.touchdesigner]
+requiresTouchDesigner = "2025.32779.24"
+
+[tool.touchdesigner.TDGdtf]
+readIndexUrls = ["https://gitlab2.derivative.ca/api/v4/projects/176/packages/pypi/simple"]
 
 [tool.touchdesigner.TDPyEnvManagerContext]
 contextVersion = 2

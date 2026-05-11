@@ -11,6 +11,25 @@ from TDStoreTools import StorageManager
 import pygdtf
 from typing import Dict, List, Any, Optional, Tuple
 import time
+import logging
+from pathlib import Path
+
+class _CompFilter(logging.Filter):
+	def __init__(self, comp: COMP):
+		self.comp = comp
+	def filter(self, record):
+		if not hasattr(record, 'comp'):
+			record.comp = 'core'
+		return True
+
+logger = logging.getLogger('TDGdtfFixture_logger')
+logger.setLevel(logging.DEBUG)
+_fh = logging.FileHandler(Path(project.folder) / 'tdgdtf_fixture.log')
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s [%(comp)s] - %(message)s'))
+_fh.addFilter(_CompFilter(None))
+if not logger.handlers:
+	logger.addHandler(_fh)
 
 from TDGdtf.core.fixture import DMXChannelSet, DMXChannelFunction, DMXValue, DMXModeInfo, TDDMXChannel, _ScalarValue, TouchDesignerFixture
 from TDGdtf.core.parser import GDTFParser
@@ -88,7 +107,7 @@ class DMXLogicalChannel:
 				self._dmxValue.x = self._currentFunction.channelSets[0].dmxRange[0].value
 			self._currentChannelSet = 0
 		else:
-			debug('Invalid menu index for channel function:', menuIndex)
+			logger.warning('Invalid menu index for channel function: %s (max %d)', menuIndex, len(self.channelFunctions) - 1)
 
 	@property
 	def currentFunctionValue(self) -> float:
@@ -252,7 +271,6 @@ class FixtureGroup:
 		"""
 		return cls(d['name'], d['fixtureIds'])
 
-
 class FixtureExt:
 	"""TouchDesigner COMP extension that parses a GDTF file, builds a POP network, and manages DMX fixture instances."""
 
@@ -261,6 +279,10 @@ class FixtureExt:
 		self.ownerComp = ownerComp
 		self.fixture = None
 		self._modes = 0
+
+		# logger
+		self._log = logging.getLogger(f'TDGdtfFixture_logger.{id(ownerComp)}')
+		self._log.addFilter(_CompFilter(ownerComp))
 
 		storedItems = [
 			{'name': '_fixtureName', 'default': ''},
@@ -318,6 +340,7 @@ class FixtureExt:
 			fid += 1
 		fi = FixtureInstance(fid, label, self._channelTemplate)
 		self._fixtureInstances.append(fi)
+		self._log.debug('AddFixture: id=%d label=%r', fid, label)
 		self._refreshTargetMenu()
 		self._persistFixtures()
 		self._updateDmxDependencies()
@@ -325,7 +348,12 @@ class FixtureExt:
 
 	def RemoveFixture(self, fixtureId: int):
 		"""Remove a fixture instance by its ID."""
+		before = len(self._fixtureInstances)
 		self._fixtureInstances = [fi for fi in self._fixtureInstances if fi.fixtureId != fixtureId]
+		if len(self._fixtureInstances) == before:
+			self._log.warning('RemoveFixture: fixtureId %d not found', fixtureId)
+		else:
+			self._log.debug('RemoveFixture: id=%d', fixtureId)
 		self._refreshTargetMenu()
 		self._persistFixtures()
 		self._updateDmxDependencies()
@@ -394,7 +422,7 @@ class FixtureExt:
 		knownIds = {fi.fixtureId for fi in self._fixtureInstances}
 		for fid in fixtureIds:
 			if fid not in knownIds:
-				debug('CreateGroup: unknown fixtureId', fid)
+				self._log.warning('CreateGroup %r: fixtureId %d does not exist', name, fid)
 		self._fixtureGroups[name] = FixtureGroup(name, fixtureIds)
 		self._refreshTargetMenu()
 		self._persistFixtures()
@@ -458,19 +486,20 @@ class FixtureExt:
 			modeIndex: 0-based index into fixture.dmxModes; clamped to valid range.
 		"""
 		t0 = time.time()
-		print(f'[GDTF TIMER] === Parse start ===')
+		gdtfFile = self.ownerComp.par.Gdtffile.eval()
+		self._log.info('Parsing GDTF file: %s', gdtfFile)
 		parser = GDTFParser()
-		fixture = parser.parseGdtfFile(self.ownerComp.par.Gdtffile.eval())
-		print(f'[GDTF TIMER] parseGdtfFile total:         {time.time()-t0:.3f}s')
+		fixture = parser.parseGdtfFile(gdtfFile)
+		self._log.debug('parseGdtfFile: %.3fs', time.time() - t0)
 		self.fixture = fixture
 		menuNames = [m.name for m in fixture.dmxModes]
 		self._modeMenu = tdu.ParMenu(menuNames, menuLabels=menuNames)
 		self._fixtureName = fixture.name
 		self._fixtureManufacturer = fixture.manufacturer
 		modeIndex = max(0, min(modeIndex, len(fixture.dmxModes) - 1))
-		print(f'[GDTF TIMER] CreateNetwork start:          {time.time()-t0:.3f}s')
+		self._log.debug('CreateNetwork start: %.3fs', time.time() - t0)
 		self.CreateNetwork(fixture.dmxModes[modeIndex], myTime=t0)
-		print(f'[GDTF TIMER] === Parse complete:            {time.time()-t0:.3f}s ===')
+		self._log.info('Parse complete (%s %s, %d modes): %.3fs', fixture.manufacturer, fixture.name, len(fixture.dmxModes), time.time() - t0)
 
 	def CreateNetwork(self, dmxMode: Optional[DMXModeInfo] = None, myTime: float = 0):
 		"""
@@ -483,6 +512,7 @@ class FixtureExt:
 			return op
 
 		if not self.fixture:
+			self._log.error('CreateNetwork called with no fixture data')
 			raise ValueError("No fixture data available. Please parse a GDTF file first.")
 
 		if dmxMode is None:
@@ -502,7 +532,7 @@ class FixtureExt:
 		for parGroup in channelFunctionsPage.parGroups:
 			parGroup.destroy()
 
-		print(f'[GDTF TIMER]   cleanup old ops/params:     {time.time()-myTime:.3f}s')
+		self._log.debug('CreateNetwork: cleanup old ops/params: %.3fs', time.time() - myTime)
 		allChannels = []
 		# first get the geometries
 		primitives = []
@@ -564,7 +594,7 @@ class FixtureExt:
 				seqItem.par.customname = channel.tdChannelName
 				seqItem.par.numcomps = channel.components
 
-		print(f'[GDTF TIMER]   geo ops created ({len(geometries)} geos, {len(allChannels)} ch): {time.time()-myTime:.3f}s')
+		self._log.debug('CreateNetwork: %d geos, %d channels: %.3fs', len(geometries), len(allChannels), time.time() - myTime)
 		# first combine the lineStrips
 		if len(lineStrips) > 1:
 			lineStripMerge = _createOp(mergePOP, 'lineStripMerge')
@@ -611,7 +641,7 @@ class FixtureExt:
 		for i in range(len(attrCombineOp.inputs)):
 			attrCombineOp.seq.input[i].par.attrs = '*'
 
-		print(f'[GDTF TIMER]   merge/combine wired:       {time.time()-myTime:.3f}s')
+		self._log.debug('CreateNetwork: merge/combine wired: %.3fs', time.time() - myTime)
 		# create all dmx channels in fixture
 		fixtureOp.seq.dmxchan.numBlocks = max(1, len(allChannels))
 		allChannels.sort(key=lambda channel: channel.dmxOffset[0])
@@ -629,22 +659,22 @@ class FixtureExt:
 			seqItem.par.merge = channel.mergeWithAbove
 			seqItem.par.normalized = channel.normalized
 
-		print(f'[GDTF TIMER]   fixture seq dmxchan set:   {time.time()-myTime:.3f}s')
+		self._log.debug('CreateNetwork: fixture seq dmxchan set: %.3fs', time.time() - myTime)
 		# save channel template and build channel params
 		t_save = time.time()
 		self._saveState(allChannels)
-		print(f'[GDTF TIMER]   _saveState:                {time.time()-t_save:.3f}s')
+		self._log.debug('CreateNetwork: _saveState: %.3fs', time.time() - t_save)
 		self._channelTemplate = self._savedChannels
 		t_cp = time.time()
 		self._createChannelParams(self._channelTemplate)
-		print(f'[GDTF TIMER]   _createChannelParams:      {time.time()-t_cp:.3f}s')
+		self._log.debug('CreateNetwork: _createChannelParams: %.3fs', time.time() - t_cp)
 
 		# rebuild or create fixture instances against the new template, then refresh display
 		t_ref = time.time()
 		self._rebuildFixtureInstances()
 		self._refreshTargetMenu()
 		self._updateDisplayParams()
-		print(f'[GDTF TIMER]   AddFixture+refresh:        {time.time()-t_ref:.3f}s')
+		self._log.debug('CreateNetwork: rebuild+refresh: %.3fs', time.time() - t_ref)
 
 		# # create parexec DAT to watch for parameter changes
 		# parexecOp = _createOp(parameterexecuteDAT, 'parexec_channelControl')
@@ -903,6 +933,8 @@ class FixtureExt:
 							seen.add(fid)
 							result.append(fi)
 							break
+			else:
+				self._log.warning('_resolveTarget: unknown token %r', token)
 		return result
 
 	def _refreshTargetMenu(self):
@@ -919,16 +951,15 @@ class FixtureExt:
 		par.menuLabels = labels
 
 	def _updateDisplayParams(self):
-		myTime = time.time()
-		debug('starting display param update', myTime)
 		"""Write all channel values to the custom params (full refresh)."""
+		myTime = time.time()
 		seen = set()
 		for ch in self._channelTemplate:
 			attrName = ch['name']
 			if attrName not in seen:
 				seen.add(attrName)
 				self._updateChannelDisplayParams(attrName)
-		debug('finished display param update', time.time()-myTime)
+		self._log.debug('_updateDisplayParams: %.3fs', time.time() - myTime)
 
 	def _updateChannelDisplayParams(self, channelName: str, roles: Optional[set] = None):
 		"""Update display params for a single channel. If roles is None, update everything."""
@@ -1116,5 +1147,5 @@ class FixtureExt:
 		self._createChannelParams(self._channelTemplate)
 		self._refreshTargetMenu()
 		self._updateDisplayParams()
-		debug('FixtureExt: state restored -', len(self._savedChannels), 'channels,',
-			  len(self._fixtureInstances), 'fixtures,', len(self._fixtureGroups), 'groups')
+		self._log.info('State restored: %d channels, %d fixtures, %d groups',
+					len(self._savedChannels), len(self._fixtureInstances), len(self._fixtureGroups))

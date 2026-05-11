@@ -27,6 +27,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 |---|---|---|
 | `Modes` | get/set | Get the current DMX mode object. Set with a menu value to switch modes and rebuild the network. |
 | `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. Each dependency's `.val` is a list of DMX values, one entry per fixture instance. Updates automatically when values change. |
+| `DmxChannelsByType` | dict (read-only) | Dict with `'point'` and `'primitive'` keys, each a deduplicated list of attribute names by geometry type. |
 
 ---
 
@@ -162,6 +163,22 @@ For multi-component channels (e.g. normalized RGBI), each entry in the list is a
 ```python
 op('yourComp').DmxChannel('ColorRGBI').val
 # [(1.0, 0.5, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]
+```
+
+#### `DmxChannelsByType` (property)
+Return a dict grouping all channel attribute names by geometry type.
+
+```python
+op('yourComp').DmxChannelsByType
+# {'point': ['Pan', 'Tilt'], 'primitive': ['Dimmer', 'Color1']}
+```
+
+#### `GetDmxChannelValues(channelName)`
+Return a flat list of all DMX values for a channel across all geometry groups and fixture instances. Useful when a channel spans multiple geometry groups (e.g. a sequential fixture) and you want a single ordered list instead of the nested dict/list structure that `DmxChannel().val` returns.
+
+```python
+op('yourComp').GetDmxChannelValues('Pan')
+# [128, 200, 50]  — one value per fixture, groups concatenated
 ```
 
 ---
