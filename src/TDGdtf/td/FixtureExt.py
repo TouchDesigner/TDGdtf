@@ -450,6 +450,24 @@ class FixtureExt:
 		self._updateDmxDependency(attrName)
 		self._updateChannelDisplayParams(attrName, roles={'value'})
 
+	def SetNormalizedValue(self, channelName: str, value: float, target='all'):
+		"""Set a normalized 0-1 value on a channel for the given target(s).
+		Only valid for normalized channels; logs a warning and no-ops for non-normalized ones.
+		"""
+		unames, attrName = self._resolveChannel(channelName)
+		ch = self._channelByName.get(attrName)
+		if ch is None:
+			return
+		if not ch['normalized']:
+			self._log.warning('SetNormalizedValue: channel %r is not normalized', channelName)
+			return
+		rawValue = int(round(float(value) * (2 ** ch['byteCount'] - 1)))
+		for fi in self._resolveTarget(target):
+			for uname in unames:
+				fi.setDmxValue(uname, rawValue)
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName, roles={'value'})
+
 	def SetFunction(self, channelName: str, functionIndex: int, target='all'):
 		"""Set the active channel function by index for the given target(s)."""
 		unames, attrName = self._resolveChannel(channelName)

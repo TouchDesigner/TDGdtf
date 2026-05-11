@@ -114,6 +114,14 @@ op('yourComp').SetDmxValue('Pan', 200, target='front')
 op('yourComp').SetDmxValue('Tilt', 50, target=2)
 ```
 
+#### `SetNormalizedValue(channelName, value, target='all')`
+Set a normalized 0–1 value on a channel. Only valid for channels marked as normalized in the GDTF fixture definition — logs a warning and no-ops if the channel is not normalized.
+
+```python
+op('yourComp').SetNormalizedValue('Dimmer', 0.5)
+op('yourComp').SetNormalizedValue('Dimmer', 1.0, target='front')
+```
+
 #### `SetFunction(channelName, functionIndex, target='all')`
 Set the active channel function by its menu index. This switches which function is controlling the channel (e.g. switching between different gobo wheels).
 
