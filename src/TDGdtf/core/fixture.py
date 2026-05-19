@@ -35,6 +35,7 @@ class TDDMXChannel:
     geoGroup: Optional[str] = None  # The geometry group this channel belongs to, if any
     tdChannelName: Optional[str] = None  # The TouchDesigner channel name, this is mostly removing spaces etc
     channelFunctions: Optional[List[pygdtf.ChannelFunction]] = None  # List of channel functions for this channel
+    masterControlled: bool = False  # True when LogicalChannel.master is Grand or Group
 
 
 @dataclass

@@ -326,7 +326,7 @@ class FixtureExt:
 		self._modes = value.menuIndex
 		mode = self.fixture.dmxModes[self._modes]
 		if mode.tdGeometries is None:
-			self.Parse(modeIndex=self._modes)
+			self.Parse()
 		else:
 			self.CreateNetwork(dmxMode=mode)
 
@@ -371,6 +371,19 @@ class FixtureExt:
 		return [{'fixtureId': fi.fixtureId, 'label': fi.label, 'index': i}
 				for i, fi in enumerate(self._fixtureInstances)]
 
+	def GetFixture(self, identifier) -> Optional[dict]:
+		"""Return the info dict for a single fixture, or None if not found.
+
+		Args:
+			identifier: int fixtureId, or str label (first match).
+		"""
+		for i, fi in enumerate(self._fixtureInstances):
+			if isinstance(identifier, int) and fi.fixtureId == identifier:
+				return {'fixtureId': fi.fixtureId, 'label': fi.label, 'index': i}
+			if isinstance(identifier, str) and fi.label == identifier:
+				return {'fixtureId': fi.fixtureId, 'label': fi.label, 'index': i}
+		return None
+
 	def DmxChannel(self, name: str):
 		"""Return the tdu.Dependency for a channel. .val is a list of DMX values (one per fixture)."""
 		return self._dmxDeps.get(name)
@@ -386,6 +399,20 @@ class FixtureExt:
 		result = {'point': [], 'primitive': []}
 		seen = set()
 		for ch in self._channelTemplate:
+			attrName = ch['name']
+			if attrName not in seen:
+				seen.add(attrName)
+				result[ch.get('geoType', 'primitive')].append(attrName)
+		return result
+
+	@property
+	def MasterControlledChannelsByType(self) -> dict:
+		"""Dict with 'point' and 'primitive' keys listing only Grand-master-controlled channel names."""
+		result = {'point': [], 'primitive': []}
+		seen = set()
+		for ch in self._channelTemplate:
+			if not ch.get('masterControlled', False):
+				continue
 			attrName = ch['name']
 			if attrName not in seen:
 				seen.add(attrName)
@@ -497,15 +524,18 @@ class FixtureExt:
 
 	# ── Parsing & Network Creation ──────────────────────────
 
-	def Parse(self, modeIndex: int = 0):
-		"""Parse the GDTF file and build the POP network for the selected mode.
-
-		Args:
-			modeIndex: 0-based index into fixture.dmxModes; clamped to valid range.
+	def Parse(self):
+		"""Parse the GDTF file and build the POP network for the active DMX mode.
+		Preserves the currently selected mode by name; falls back to the first mode if no match.
 		"""
 		t0 = time.time()
 		gdtfFile = self.ownerComp.par.Gdtffile.eval()
 		self._log.info('Parsing GDTF file: %s', gdtfFile)
+
+		# Read current mode name before _modeMenu is rebuilt
+		modesPar = self.ownerComp.par['Modes']
+		currentModeName = modesPar.val if modesPar is not None else None
+
 		parser = GDTFParser()
 		fixture = parser.parseGdtfFile(gdtfFile)
 		self._log.debug('parseGdtfFile: %.3fs', time.time() - t0)
@@ -514,7 +544,15 @@ class FixtureExt:
 		self._modeMenu = tdu.ParMenu(menuNames, menuLabels=menuNames)
 		self._fixtureName = fixture.name
 		self._fixtureManufacturer = fixture.manufacturer
-		modeIndex = max(0, min(modeIndex, len(fixture.dmxModes) - 1))
+
+		if currentModeName in menuNames:
+			modeIndex = menuNames.index(currentModeName)
+			self._log.debug('Parse: matched existing mode %r at index %d', currentModeName, modeIndex)
+		else:
+			modeIndex = 0
+			self._log.debug('Parse: mode %r not found in new file, defaulting to index 0', currentModeName)
+		self._modes = modeIndex
+
 		self._log.debug('CreateNetwork start: %.3fs', time.time() - t0)
 		self.CreateNetwork(fixture.dmxModes[modeIndex], myTime=t0)
 		self._log.info('Parse complete (%s %s, %d modes): %.3fs', fixture.manufacturer, fixture.name, len(fixture.dmxModes), time.time() - t0)
@@ -1128,6 +1166,7 @@ class FixtureExt:
 				'components': channel.components,
 				'geoType': channel.geoType,
 				'instances': channel.instances,
+				'masterControlled': getattr(channel, 'masterControlled', False),
 				'channelFunctions': channelFunctions,
 			})
 		self._savedChannels = channelData
@@ -1142,6 +1181,8 @@ class FixtureExt:
 				ch['geoGroup'] = None
 			if 'uniqueName' not in ch:
 				ch['uniqueName'] = _chUniqueKey(ch)
+			if 'masterControlled' not in ch:
+				ch['masterControlled'] = False
 
 		# Rebuild a lightweight fixture stub so Modes property works
 		self.fixture = TouchDesignerFixture(

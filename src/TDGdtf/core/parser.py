@@ -165,9 +165,13 @@ class GDTFParser:
             if match:
                 channelName = channelName[:match.start()] + channelName[match.end():]
 
-        channelFunctions = firstChannel.logical_channels[0].channel_functions
+        logicalChannel = firstChannel.logical_channels[0]
+        channelFunctions = logicalChannel.channel_functions
         # if there is more than 1 channel function, this channel is not normalized
         normalized = len(channelFunctions) == 1
+
+        master = getattr(logicalChannel, 'master', None)
+        masterControlled = str(master).lower() == 'grand'
 
         channel = TDDMXChannel(
             name=channelName,
@@ -178,7 +182,8 @@ class GDTFParser:
             components=len(channelList),
             mergeWithAbove=mergeWithAbove,
             normalized=normalized,
-            channelFunctions=channelFunctions
+            channelFunctions=channelFunctions,
+            masterControlled=masterControlled,
         )
         return channel
 
