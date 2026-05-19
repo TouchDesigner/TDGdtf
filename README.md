@@ -8,6 +8,8 @@ A TouchDesigner tool that parses GDTF fixture files and builds component network
 2. Call `Parse()` to read the file, build the operator network, and create channel parameters.
 3. Use the **Modes** property or the mode menu parameter to switch DMX modes.
 
+Fixture instances, groups, and channel values are persisted via TouchDesigner's StorageManager and survive project restarts without needing to re-parse the GDTF file.
+
 ---
 
 ## Promoted API Reference
@@ -21,14 +23,20 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 | `Parse()` | Parse the GDTF file set in the **Gdtffile** parameter and build the operator network. Preserves the currently selected mode by name; falls back to the first mode if no match exists in the new file. |
 | `CreateNetwork(dmxMode=None)` | Rebuild the operator network for a specific DMX mode. Called automatically by `Parse()` and the `Modes` setter. |
 
+### Methods
+
+| Method | Description |
+|---|---|
+| `DmxChannel(name)` | Return the `tdu.Dependency` for a single channel by name, or `None` if not found. |
+
 ### Properties
 
 | Property | Type | Description |
 |---|---|---|
-| `Modes` | get/set | Get the current DMX mode object. Set with a menu value to switch modes and rebuild the network. |
+| `Modes` | get/set | Get the current `DMXModeInfo` object. Assign a TD menu parameter value (with `.menuIndex`) to switch modes and rebuild the network. |
 | `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. Each dependency's `.val` is a list of DMX values, one entry per fixture instance. Updates automatically when values change. |
 | `DmxChannelsByType` | dict (read-only) | Dict with `'point'` and `'primitive'` keys, each a deduplicated list of attribute names by geometry type. |
-| `MasterControlledChannelsByType` | dict (read-only) | Same shape as `DmxChannelsByType` but only includes channels where `LogicalChannel.master == "Grand"` in the GDTF definition. |
+| `MasterControlledChannelsByType` | dict (read-only) | Same shape as `DmxChannelsByType` but filtered to channels whose GDTF `LogicalChannel.master` is `"Grand"`. Channels with `"Group"` or `"None"` master are excluded. |
 
 ---
 
@@ -164,7 +172,7 @@ op('yourComp').SetChannelSet('Color1', 3)
 ### Retrieving Values
 
 #### `DmxChannel(name)`
-Return the `tdu.Dependency` object for a single channel. The dependency's `.val` holds a list of DMX values, one per fixture instance (ordered by fixture index).
+Return the `tdu.Dependency` object for a single channel, or `None` if the channel name is not found. The dependency's `.val` holds a list of DMX values, one per fixture instance (ordered by fixture index).
 
 ```python
 dep = op('yourComp').DmxChannel('Pan')
