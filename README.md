@@ -18,7 +18,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 
 | Method | Description |
 |---|---|
-| `Parse()` | Parse the GDTF file set in the **Gdtffile** parameter and build the full operator network for the first DMX mode. |
+| `Parse()` | Parse the GDTF file set in the **Gdtffile** parameter and build the operator network. Preserves the currently selected mode by name; falls back to the first mode if no match exists in the new file. |
 | `CreateNetwork(dmxMode=None)` | Rebuild the operator network for a specific DMX mode. Called automatically by `Parse()` and the `Modes` setter. |
 
 ### Properties
@@ -28,6 +28,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 | `Modes` | get/set | Get the current DMX mode object. Set with a menu value to switch modes and rebuild the network. |
 | `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. Each dependency's `.val` is a list of DMX values, one entry per fixture instance. Updates automatically when values change. |
 | `DmxChannelsByType` | dict (read-only) | Dict with `'point'` and `'primitive'` keys, each a deduplicated list of attribute names by geometry type. |
+| `MasterControlledChannelsByType` | dict (read-only) | Same shape as `DmxChannelsByType` but only includes channels where `LogicalChannel.master == "Grand"` in the GDTF definition. |
 
 ---
 
@@ -62,6 +63,20 @@ Return a list of dicts describing all current fixture instances.
 op('yourComp').GetFixtures()
 # [{'fixtureId': 0, 'label': 'Stage Left', 'index': 0},
 #  {'fixtureId': 1, 'label': '',            'index': 1}]
+```
+
+#### `GetFixture(identifier)`
+Return the info dict for a single fixture, or `None` if not found. Pass an `int` to look up by fixture ID, or a `str` to look up by label (first match).
+
+```python
+op('yourComp').GetFixture(0)
+# {'fixtureId': 0, 'label': 'Stage Left', 'index': 0}
+
+op('yourComp').GetFixture('Stage Left')
+# {'fixtureId': 0, 'label': 'Stage Left', 'index': 0}
+
+op('yourComp').GetFixture(99)
+# None
 ```
 
 ---
@@ -179,6 +194,14 @@ Return a dict grouping all channel attribute names by geometry type.
 ```python
 op('yourComp').DmxChannelsByType
 # {'point': ['Pan', 'Tilt'], 'primitive': ['Dimmer', 'Color1']}
+```
+
+#### `MasterControlledChannelsByType` (property)
+Same shape as `DmxChannelsByType` but filtered to only channels whose GDTF `LogicalChannel.master` is `"Grand"`. Use this to know which channels should be scaled by an intensity master or zeroed on blackout.
+
+```python
+op('yourComp').MasterControlledChannelsByType
+# {'point': [], 'primitive': ['Dimmer', 'BackgroundDimmer']}
 ```
 
 #### `GetDmxChannelValues(channelName)`
