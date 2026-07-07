@@ -27,12 +27,14 @@ class TDDMXChannel:
     name: str
     channelObj: pygdtf.DmxChannel  # The DMX channel object from the GDTF file
     dmxBreak: int = 1
-    dmxOffset: int = 0
+    dmxOffset: Optional[List[int]] = None  # DMX byte offsets from pygdtf; length determines bit depth
     bitDepth: BitDepth = BitDepth.BIT_8
     components: int = 1
     mergeWithAbove: bool = False
     normalized: bool = False  # Whether this channel is normalized
     geoGroup: Optional[str] = None  # The geometry group this channel belongs to, if any
+    geoType: str = 'primitive'  # 'point' for sequential geometries, 'primitive' otherwise
+    instances: int = 1  # Number of sequential geometry members this channel drives
     tdChannelName: Optional[str] = None  # The TouchDesigner channel name, this is mostly removing spaces etc
     channelFunctions: Optional[List[pygdtf.ChannelFunction]] = None  # List of channel functions for this channel
     masterControlled: bool = False  # True when LogicalChannel.master is Grand
@@ -131,15 +133,7 @@ class DMXChannelFunction:
         self.physicalRange = (channelFunction.physical_from, channelFunction.physical_to)
         self.channelSets: List[DMXChannelSet] = _loadChannelSets()
 
-        self._value: int = 0
-
-    @property
-    def value(self) -> int:
-        return self._value
-
-    @value.setter
-    def value(self, value: int):
-        self._value = value
+        self.value: int = 0
 
     def toDict(self) -> dict:
         """Serialise to a plain dict for storage."""
@@ -166,14 +160,14 @@ class DMXChannelFunction:
         obj.default = _ScalarValue(d['default'])
         obj.physicalRange = (_ScalarValue(d['physicalFrom']), _ScalarValue(d['physicalTo']))
         obj.channelSets = [DMXChannelSet.fromDict(cs) for cs in d['channelSets']]
-        obj._value = 0
+        obj.value = 0
         return obj
 
 
 class DMXValue:
-    """Four-component raw DMX value (x/y/z/w) with an optional change callback."""
+    """Four-component raw DMX value (x/y/z/w)."""
 
-    def __init__(self, x: float, y: float = 0, z: float = 0, w: float = 0, callback=None):
+    def __init__(self, x: float, y: float = 0, z: float = 0, w: float = 0):
         """Initialise with raw DMX component values.
 
         Args:
@@ -181,50 +175,11 @@ class DMXValue:
             y: Second component for 16-bit or wider channels.
             z: Third component for 24-bit or wider channels.
             w: Fourth component for 32-bit channels.
-            callback: Called with this DMXValue instance on any component write.
         """
-        self._x = x
-        self._y = y
-        self._z = z
-        self._w = w
-        self._callback = callback
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
 
-    @property
-    def x(self) -> float:
-        return self._x
-
-    @x.setter
-    def x(self, value: float):
-        self._x = value
-        if self._callback:
-            self._callback(self)
-
-    @property
-    def y(self) -> float:
-        return self._y
-
-    @y.setter
-    def y(self, value: float):
-        self._y = value
-        if self._callback:
-            self._callback(self)
-
-    @property
-    def z(self) -> float:
-        return self._z
-
-    @z.setter
-    def z(self, value: float):
-        self._z = value
-        if self._callback:
-            self._callback(self)
-
-    @property
-    def w(self) -> float:
-        return self._w
-
-    @w.setter
-    def w(self, value: float):
-        self._w = value
-        if self._callback:
-            self._callback(self)
+    def __repr__(self) -> str:
+        return f"DMXValue(x={self.x}, y={self.y}, z={self.z}, w={self.w})"

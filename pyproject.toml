@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "TDGdtf"
-version = "0.1.10"
+dynamic = ["version"]
 description = "GDTF fixture parser and TouchDesigner component builder"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -30,6 +30,9 @@ dev = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "TDGdtf.__version__"}
 
 [tool.setuptools.package-data]
 TDGdtf = [

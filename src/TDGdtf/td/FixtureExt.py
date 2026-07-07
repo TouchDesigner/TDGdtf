@@ -8,34 +8,44 @@ can be accessed externally, e.g. op('yourComp').PromotedFunction().
 Help: search "Extensions" in wiki
 """
 from TDStoreTools import StorageManager
-import pygdtf
 from typing import Dict, List, Any, Optional, Tuple
 import time
 import logging
 from pathlib import Path
 
 class _CompFilter(logging.Filter):
-	def __init__(self, comp: COMP):
+	"""Stamps records with the owning COMP's path (or 'core' for non-COMP records)."""
+	def __init__(self, comp=None):
+		super().__init__()
 		self.comp = comp
 	def filter(self, record):
 		if not hasattr(record, 'comp'):
-			record.comp = 'core'
+			record.comp = self.comp.path if self.comp is not None else 'core'
 		return True
 
 logger = logging.getLogger('TDGdtfFixture_logger')
 logger.setLevel(logging.DEBUG)
-_fh = logging.FileHandler(Path(project.folder) / 'tdgdtf_fixture.log')
-_fh.setLevel(logging.DEBUG)
-_fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s [%(comp)s] - %(message)s'))
-_fh.addFilter(_CompFilter(None))
 if not logger.handlers:
+	_fh = logging.FileHandler(Path(project.folder) / 'tdgdtf_fixture.log')
+	_fh.setLevel(logging.DEBUG)
+	_fh.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s [%(comp)s] - %(message)s'))
+	_fh.addFilter(_CompFilter(None))
 	logger.addHandler(_fh)
+	# route the TD-independent core modules (TDGdtf.core.*) into the same log file
+	_coreLogger = logging.getLogger('TDGdtf')
+	_coreLogger.setLevel(logging.DEBUG)
+	_coreLogger.addHandler(_fh)
 
-from TDGdtf.core.fixture import DMXChannelSet, DMXChannelFunction, DMXValue, DMXModeInfo, TDDMXChannel, _ScalarValue, TouchDesignerFixture
+from TDGdtf.core.fixture import DMXChannelFunction, DMXValue, DMXModeInfo, TouchDesignerFixture
 from TDGdtf.core.parser import GDTFParser
 from TDGdtf.core.utils import legalTdParName
 
 tag = 'GDTFPARSER'
+
+
+def _parSuffixes(components: int) -> List[str]:
+	"""Per-component TD par name suffixes: size-1 pars use the bare name, size>1 pars are Name1..NameN."""
+	return [''] if components <= 1 else [str(i + 1) for i in range(components)]
 
 
 def _chUniqueKey(ch: dict) -> str:
@@ -49,16 +59,16 @@ class DMXLogicalChannel:
 	"""Pure data/logic object representing a single DMX logical channel.
 	No TouchDesigner operator references — all parameter UI is handled by FixtureExt.
 	"""
-	def __init__(self, name: str, channelFunctionDicts: list, normalized: bool, byteCount: int = 8, components: int = 1):
+	def __init__(self, name: str, channelFunctionDicts: list, normalized: bool, bitDepth: int = 8, components: int = 1):
 		"""Set up channel functions and default DMX value from stored data.
 
 		Args:
 			channelFunctionDicts: List of dicts as produced by _saveState.
-			byteCount: Bit depth of the channel (8, 16, 24, or 32).
+			bitDepth: Bit depth of the channel (8, 16, 24, or 32).
 		"""
 		self.name = name
 		self.normalized = normalized
-		self.byteCount = byteCount
+		self.bitDepth = bitDepth
 		self.components = components
 		channelFunctionList = [DMXChannelFunction.fromDict(d) for d in channelFunctionDicts]
 		self.channelFunctions: List[DMXChannelFunction] = channelFunctionList
@@ -68,20 +78,15 @@ class DMXLogicalChannel:
 			y=0,
 			z=0,
 			w=0,
-			callback=self._dmxValueChanged
 		)
 		self._currentFunctionValue: float = 0.0
 		self._currentChannelSet: int = 0
-		self._parBaseName: str = legalTdParName(name)
 
-	def __int__(self) -> float:
-		return self._dmxValue.x
+	def __int__(self) -> int:
+		return int(self._dmxValue.x)
 
 	def __str__(self) -> str:
 		return f"DMXLogicalChannel(name={self.name}, dmxValue={self._dmxValue})"
-
-	def _dmxValueChanged(self, value: DMXValue):
-		self.dmxValue = DMXValue(value.x, value.y, value.z, value.w, callback=self._dmxValueChanged)
 
 	@property
 	def dmxValue(self) -> DMXValue:
@@ -101,7 +106,7 @@ class DMXLogicalChannel:
 	def currentFunction(self, menuIndex: int):
 		"""Set the current channel function by its menu index."""
 		menuIndex = int(menuIndex)
-		if len(self.channelFunctions) > 0 and menuIndex < len(self.channelFunctions):
+		if 0 <= menuIndex < len(self.channelFunctions):
 			self._currentFunction = self.channelFunctions[menuIndex]
 			if self._currentFunction.channelSets:
 				self._dmxValue.x = self._currentFunction.channelSets[0].dmxRange[0].value
@@ -140,8 +145,11 @@ class DMXLogicalChannel:
 		physMax = physicalTo.value
 		dmxMin = dmxFrom.value
 		dmxMax = dmxTo.value
+		if physMax == physMin:
+			# zero-width physical range (legal in GDTF) — no mapping possible, use the range start
+			return int(dmxMin)
 		normalized = tdu.remap(functionValue, physMin, physMax, 0, 1)
-		return int(tdu.remap(normalized, 0, 1, dmxMin, dmxMax))
+		return int(round(tdu.remap(normalized, 0, 1, dmxMin, dmxMax)))
 
 	def toDict(self) -> dict:
 		"""Serialize channel runtime state."""
@@ -159,10 +167,9 @@ class DMXLogicalChannel:
 		self._dmxValue = DMXValue(
 			dmx.get('x', 0), dmx.get('y', 0),
 			dmx.get('z', 0), dmx.get('w', 0),
-			callback=self._dmxValueChanged
 		)
 		funcIdx = d.get('currentFunction', 0)
-		if self.channelFunctions and funcIdx < len(self.channelFunctions):
+		if self.channelFunctions and 0 <= funcIdx < len(self.channelFunctions):
 			self._currentFunction = self.channelFunctions[funcIdx]
 		self._currentFunctionValue = d.get('currentFunctionValue', 0.0)
 		self._currentChannelSet = d.get('currentChannelSet', 0)
@@ -184,7 +191,7 @@ class FixtureInstance:
 				name=ch['name'],
 				channelFunctionDicts=ch['channelFunctions'],
 				normalized=ch['normalized'],
-				byteCount=ch['byteCount'],
+				bitDepth=ch['bitDepth'],
 				components=ch['components'],
 			)
 
@@ -196,8 +203,7 @@ class FixtureInstance:
 		"""
 		ch = self.channels.get(channelName)
 		if ch:
-			ch.dmxValue = DMXValue(value, ch.dmxValue.y, ch.dmxValue.z, ch.dmxValue.w,
-								   callback=ch._dmxValueChanged)
+			ch.dmxValue = DMXValue(value, ch.dmxValue.y, ch.dmxValue.z, ch.dmxValue.w)
 
 	def setFunction(self, channelName: str, functionIndex: int):
 		"""Switch the active channel function.
@@ -280,9 +286,10 @@ class FixtureExt:
 		self.fixture = None
 		self._modes = 0
 
-		# logger
+		# logger — per-comp child logger; guard so filters don't pile up across recompiles
 		self._log = logging.getLogger(f'TDGdtfFixture_logger.{id(ownerComp)}')
-		self._log.addFilter(_CompFilter(ownerComp))
+		if not self._log.filters:
+			self._log.addFilter(_CompFilter(ownerComp))
 
 		storedItems = [
 			{'name': '_fixtureName', 'default': ''},
@@ -334,37 +341,52 @@ class FixtureExt:
 
 	def AddFixture(self, label: str = '') -> int:
 		"""Create a new fixture instance. Returns its ID (lowest available integer)."""
-		usedIds = {fi.fixtureId for fi in self._fixtureInstances}
-		fid = 0
-		while fid in usedIds:
-			fid += 1
-		fi = FixtureInstance(fid, label, self._channelTemplate)
-		self._fixtureInstances.append(fi)
-		self._log.debug('AddFixture: id=%d label=%r', fid, label)
-		self._refreshTargetMenu()
-		self._persistFixtures()
-		self._updateDmxDependencies()
+		fid = self._addFixtureInstance(label)
+		self._refreshAfterFixtureChange()
 		return fid
 
 	def RemoveFixture(self, fixtureId: int):
 		"""Remove a fixture instance by its ID."""
+		self._removeFixtureInstance(fixtureId)
+		self._refreshAfterFixtureChange()
+
+	def SetFixtureCount(self, count: int):
+		"""Add or remove fixtures to reach the desired count. Removes highest IDs first."""
+		changed = False
+		while len(self._fixtureInstances) < count:
+			self._addFixtureInstance()
+			changed = True
+		while len(self._fixtureInstances) > count:
+			highest = max(self._fixtureInstances, key=lambda fi: fi.fixtureId)
+			self._removeFixtureInstance(highest.fixtureId)
+			changed = True
+		if changed:
+			self._refreshAfterFixtureChange()
+
+	def _addFixtureInstance(self, label: str = '') -> int:
+		"""Append a new FixtureInstance without refreshing menus/storage. Returns its ID."""
+		usedIds = {fi.fixtureId for fi in self._fixtureInstances}
+		fid = 0
+		while fid in usedIds:
+			fid += 1
+		self._fixtureInstances.append(FixtureInstance(fid, label, self._channelTemplate))
+		self._log.debug('AddFixture: id=%d label=%r', fid, label)
+		return fid
+
+	def _removeFixtureInstance(self, fixtureId: int):
+		"""Remove a FixtureInstance without refreshing menus/storage."""
 		before = len(self._fixtureInstances)
 		self._fixtureInstances = [fi for fi in self._fixtureInstances if fi.fixtureId != fixtureId]
 		if len(self._fixtureInstances) == before:
 			self._log.warning('RemoveFixture: fixtureId %d not found', fixtureId)
 		else:
 			self._log.debug('RemoveFixture: id=%d', fixtureId)
+
+	def _refreshAfterFixtureChange(self):
+		"""Refresh menus, storage, and dependencies after fixture instances changed."""
 		self._refreshTargetMenu()
 		self._persistFixtures()
 		self._updateDmxDependencies()
-
-	def SetFixtureCount(self, count: int):
-		"""Add or remove fixtures to reach the desired count. Removes highest IDs first."""
-		while len(self._fixtureInstances) < count:
-			self.AddFixture()
-		while len(self._fixtureInstances) > count:
-			highest = max(self._fixtureInstances, key=lambda fi: fi.fixtureId)
-			self.RemoveFixture(highest.fixtureId)
 
 	def GetFixtures(self) -> list:
 		"""Return list of fixture info dicts: [{fixtureId, label, index}, ...]"""
@@ -474,8 +496,7 @@ class FixtureExt:
 		for fi in self._resolveTarget(target):
 			for uname in unames:
 				fi.setDmxValue(uname, value)
-		self._updateDmxDependency(attrName)
-		self._updateChannelDisplayParams(attrName, roles={'value'})
+		self._afterValueChange(attrName, roles={'value'})
 
 	def SetNormalizedValue(self, channelName: str, value: float, target='all'):
 		"""Set a normalized 0-1 value on a channel for the given target(s).
@@ -488,12 +509,11 @@ class FixtureExt:
 		if not ch['normalized']:
 			self._log.warning('SetNormalizedValue: channel %r is not normalized', channelName)
 			return
-		rawValue = int(round(float(value) * (2 ** ch['byteCount'] - 1)))
+		rawValue = int(round(float(value) * (2 ** ch['bitDepth'] - 1)))
 		for fi in self._resolveTarget(target):
 			for uname in unames:
 				fi.setDmxValue(uname, rawValue)
-		self._updateDmxDependency(attrName)
-		self._updateChannelDisplayParams(attrName, roles={'value'})
+		self._afterValueChange(attrName, roles={'value'})
 
 	def SetFunction(self, channelName: str, functionIndex: int, target='all'):
 		"""Set the active channel function by index for the given target(s)."""
@@ -501,8 +521,7 @@ class FixtureExt:
 		for fi in self._resolveTarget(target):
 			for uname in unames:
 				fi.setFunction(uname, functionIndex)
-		self._updateDmxDependency(attrName)
-		self._updateChannelDisplayParams(attrName)
+		self._afterValueChange(attrName)
 
 	def SetFunctionValue(self, channelName: str, value: float, target='all'):
 		"""Set a physical function value for the given target(s)."""
@@ -510,8 +529,7 @@ class FixtureExt:
 		for fi in self._resolveTarget(target):
 			for uname in unames:
 				fi.setFunctionValue(uname, value)
-		self._updateDmxDependency(attrName)
-		self._updateChannelDisplayParams(attrName, roles={'value', 'functionvalue'})
+		self._afterValueChange(attrName, roles={'value', 'functionvalue'})
 
 	def SetChannelSet(self, channelName: str, channelSetIndex: int, target='all'):
 		"""Set the active channel set by index for the given target(s)."""
@@ -519,8 +537,7 @@ class FixtureExt:
 		for fi in self._resolveTarget(target):
 			for uname in unames:
 				fi.setChannelSet(uname, channelSetIndex)
-		self._updateDmxDependency(attrName)
-		self._updateChannelDisplayParams(attrName, roles={'value', 'channelset'})
+		self._afterValueChange(attrName, roles={'value', 'channelset'})
 
 	# ── Parsing & Network Creation ──────────────────────────
 
@@ -563,9 +580,9 @@ class FixtureExt:
 		"""
 		def _createOp(opType, name):
 			"""Helper function to create an operator of a given type with a specific name."""
-			op = self.ownerComp.create(opType, name)
-			op.tags = [tag]
-			return op
+			newOp = self.ownerComp.create(opType, name)
+			newOp.tags = [tag]
+			return newOp
 
 		if not self.fixture:
 			self._log.error('CreateNetwork called with no fixture data')
@@ -600,7 +617,6 @@ class FixtureExt:
 			geoName = geo.name.lower()
 			geoName = tdu.validName(geoName)
 			groupName = None
-			geoType = 'point'
 			if geo.isSequential:
 				# add in the parent name so that we can identify it more easily
 				geoName = '{}_{}'.format(geo.parent.name.lower(), geoName)
@@ -654,9 +670,9 @@ class FixtureExt:
 		# first combine the lineStrips
 		if len(lineStrips) > 1:
 			lineStripMerge = _createOp(mergePOP, 'lineStripMerge')
-			for c, i in enumerate(lineStrips):
+			for c, stripOp in enumerate(lineStrips):
 				# wire the line strips to the merge
-				i.outputConnectors[0].connect(lineStripMerge.inputConnectors[c])
+				stripOp.outputConnectors[0].connect(lineStripMerge.inputConnectors[c])
 			# now convert the multiple linestrips into a single linestrip primitive
 			primOp = _createOp(primitivePOP, 'primitive_lineStrip')
 			primOp.par.keep = True
@@ -671,9 +687,9 @@ class FixtureExt:
 			primitiveMerge = _createOp(attributecombinePOP, 'primitiveMerge')
 			primitiveMerge.par.attrclass = 'primitive'
 			primitiveMerge.seq.input.numBlocks = len(primitives)
-			for c, i in enumerate(primitives):
+			for c, primAttrOp in enumerate(primitives):
 				# wire the primitives to the merge
-				i.outputConnectors[0].connect(primitiveMerge.inputConnectors[c])
+				primAttrOp.outputConnectors[0].connect(primitiveMerge.inputConnectors[c])
 				primitiveMerge.seq.input[c].par.attrs = '*'
 
 		# next combine primitives
@@ -703,7 +719,6 @@ class FixtureExt:
 		allChannels.sort(key=lambda channel: channel.dmxOffset[0])
 		for c, channel in enumerate(allChannels):
 			seqItem = fixtureOp.seq.dmxchan[c]
-			seqItem.par.name = channel.tdChannelName
 			seqItem.par.valuetype = channel.geoType
 			if channel.geoGroup is not None:
 				seqItem.par.group = channel.geoGroup
@@ -732,24 +747,16 @@ class FixtureExt:
 		self._updateDisplayParams()
 		self._log.debug('CreateNetwork: rebuild+refresh: %.3fs', time.time() - t_ref)
 
-		# # create parexec DAT to watch for parameter changes
-		# parexecOp = _createOp(parameterexecuteDAT, 'parexec_channelControl')
-		# parexecOp.par.op = self.ownerComp
-		# parexecOp.par.valuechange = True
-		# parexecOp.text = (
-		# 	"def onValueChange(par, prev):\n"
-		# 	"\text = par.owner.ext.FixtureExt\n"
-		# 	"\tif par.page.name == 'Channel Functions':\n"
-		# 	"\t\tif par.name == 'Controltarget':\n"
-		# 	"\t\t\text._onTargetChanged()\n"
-		# 	"\t\telse:\n"
-		# 	"\t\t\text._onChannelParChange(par)\n"
-		# )
-
 		# layout created operators
 		self.ownerComp.layout(self.ownerComp.findChildren(tags=[tag]))
 
 	# ── Private Helpers ─────────────────────────────────────
+
+	def _afterValueChange(self, attrName: str, roles: Optional[set] = None):
+		"""Refresh dependency, display params, and storage after a channel value change."""
+		self._updateDmxDependency(attrName)
+		self._updateChannelDisplayParams(attrName, roles=roles)
+		self._persistFixtures()
 
 	def _resolveChannel(self, channelName: str):
 		"""Return (uniqueNames, attrName) for a given attrName or uniqueName.
@@ -796,7 +803,7 @@ class FixtureExt:
 				valPar.min = 0
 				valPar.max = 1
 				for i in range(ch['components']):
-					valPar[i].default = tdu.remap(firstDict['default'], 0, 2 ** ch['byteCount'] - 1, 0, 1) if firstDict else 0
+					valPar[i].default = tdu.remap(firstDict['default'], 0, 2 ** ch['bitDepth'] - 1, 0, 1) if firstDict else 0
 					valPar[i].clampMin = True
 					valPar[i].clampMax = True
 					valPar[i].startSection = True
@@ -804,9 +811,9 @@ class FixtureExt:
 			else:
 				valPar = chFuncPage.appendInt(valParName, label=ch['name'])
 				valPar.normMin = 0
-				valPar.normMax = 2 ** ch['byteCount'] - 1
+				valPar.normMax = 2 ** ch['bitDepth'] - 1
 				valPar.min = 0
-				valPar.max = 2 ** ch['byteCount'] - 1
+				valPar.max = 2 ** ch['bitDepth'] - 1
 				valPar.clampMin = True
 				valPar.clampMax = True
 				valPar.startSection = True
@@ -839,28 +846,32 @@ class FixtureExt:
 					chFuncVal.min = normMin
 					chFuncVal.max = normMax
 
-		self._buildParLookup(channelTemplate)
+		self._buildChannelIndexes(channelTemplate)
 		self._createDmxDependencies(channelTemplate)
 
-	def _buildParLookup(self, channelTemplate: list):
-		"""Build O(1) lookup from TD parameter name to (attrName, role, componentIndex)."""
+	def _buildChannelIndexes(self, channelTemplate: list):
+		"""Build the channel indexes: par-name → (attrName, role, componentIndex) lookup,
+		attrName → first channel dict, and attrName → all channel dicts (one per geo group)."""
 		self._parLookup = {}
 		self._channelByName = {}
 		self._chsByAttrName = {}
+		seenParNames: Dict[str, str] = {}
 		for ch in channelTemplate:
 			attrName = ch['name']
 			self._channelByName.setdefault(attrName, ch)  # first group wins for display
 			self._chsByAttrName.setdefault(attrName, []).append(ch)
-			# Only build parLookup entries for the first occurrence per attrName
-			if legalTdParName(attrName) in self._parLookup:
-				continue
+			# Only build parLookup entries for the first occurrence per parBaseName
 			parBaseName = legalTdParName(attrName)
+			existingAttr = seenParNames.get(parBaseName)
+			if existingAttr is not None:
+				if existingAttr != attrName:
+					self._log.warning('Parameter name collision: %r and %r both sanitize to %r; '
+									'the parameters control %r only', existingAttr, attrName, parBaseName, existingAttr)
+				continue
+			seenParNames[parBaseName] = attrName
 			if ch['normalized']:
-				suffixes = ['', '2', '3', '4'][:ch['components']]
-				for i, suffix in enumerate(suffixes):
+				for i, suffix in enumerate(_parSuffixes(ch['components'])):
 					self._parLookup[parBaseName + suffix] = (attrName, 'normalized', i)
-				if ch['components'] > 0:
-					self._parLookup[parBaseName + '1'] = (attrName, 'normalized', 0)
 			else:
 				self._parLookup[parBaseName] = (attrName, 'value', 0)
 				self._parLookup[parBaseName + 'function'] = (attrName, 'function', 0)
@@ -877,13 +888,13 @@ class FixtureExt:
 			return
 		rebuilt = []
 		for fi in self._fixtureInstances:
-			old_channels = fi.channels
-			new_fi = FixtureInstance(fi.fixtureId, fi.label, self._channelTemplate)
-			for name, new_ch in new_fi.channels.items():
-				old_ch = old_channels.get(name)
-				if old_ch:
-					new_ch.restoreValues(old_ch.toDict())
-			rebuilt.append(new_fi)
+			oldChannels = fi.channels
+			newFi = FixtureInstance(fi.fixtureId, fi.label, self._channelTemplate)
+			for name, newCh in newFi.channels.items():
+				oldCh = oldChannels.get(name)
+				if oldCh:
+					newCh.restoreValues(oldCh.toDict())
+			rebuilt.append(newFi)
 		self._fixtureInstances = rebuilt
 		self._persistFixtures()
 		self._updateDmxDependencies()
@@ -920,11 +931,11 @@ class FixtureExt:
 			if ch['components'] > 1:
 				comps = ['x', 'y', 'z', 'w'][:ch['components']]
 				if normalized:
-					scale = 2 ** ch['byteCount'] - 1
+					scale = 2 ** ch['bitDepth'] - 1
 					return tuple(float(getattr(channel.dmxValue, c)) / scale for c in comps)
 				return tuple(int(getattr(channel.dmxValue, c)) for c in comps)
 			if normalized:
-				scale = 2 ** ch['byteCount'] - 1
+				scale = 2 ** ch['bitDepth'] - 1
 				return float(channel.dmxValue.x) / scale
 			return int(channel.dmxValue.x)
 
@@ -1041,11 +1052,11 @@ class FixtureExt:
 			if ch['normalized']:
 				if roles is None or 'normalized' in roles or 'value' in roles:
 					compNames = ['x', 'y', 'z', 'w'][:ch['components']]
-					suffixes = ['', '2', '3', '4']
+					suffixes = _parSuffixes(ch['components'])
+					scale = 2 ** ch['bitDepth'] - 1
 					for i, comp in enumerate(compNames):
 						par = self.ownerComp.par[parBaseName + suffixes[i]]
 						if par is not None:
-							scale = 2 ** ch['byteCount'] - 1
 							par.val = getattr(channel.dmxValue, comp) / scale
 			else:
 				if roles is None or 'value' in roles:
@@ -1082,7 +1093,6 @@ class FixtureExt:
 						menuPar.val = channel.currentChannelSet
 		finally:
 			self._suppressParamCallbacks = False
-		self._updateDmxDependency(channelName)
 
 	def _onTargetChanged(self):
 		"""Called when the Controltarget parameter changes."""
@@ -1108,9 +1118,8 @@ class FixtureExt:
 				for uname in unames:
 					channel = fi.channels.get(uname)
 					if channel:
-						setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.byteCount - 1))
-			self._updateDmxDependency(attrName)
-			self._updateChannelDisplayParams(attrName, roles={'normalized'})
+						setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.bitDepth - 1))
+			self._afterValueChange(attrName, roles={'normalized'})
 		elif role == 'value':
 			self.SetDmxValue(channelName, par.eval(), targetStr)
 		elif role == 'function':
@@ -1130,29 +1139,9 @@ class FixtureExt:
 		channelData = []
 		for channel in allChannels:
 			channelFunctions = []
-			if channel.channelObj and hasattr(channel.channelObj, 'logical_channels'):
-				logicalChannels = channel.channelObj.logical_channels
-				if logicalChannels:
-					for cf in logicalChannels[0].channel_functions:
-						cSets = []
-						for cs in cf.channel_sets:
-							if len(cs.name):
-								cSets.append({
-									'name': cs.name,
-									'dmxFrom': cs.dmx_from.value,
-									'dmxTo': cs.dmx_to.value,
-									'physicalFrom': cs.physical_from.value,
-									'physicalTo': cs.physical_to.value,
-								})
-						channelFunctions.append({
-							'name': cf.name,
-							'dmxFrom': cf.dmx_from.value,
-							'dmxTo': cf.dmx_to.value,
-							'default': cf.default.value,
-							'physicalFrom': cf.physical_from.value,
-							'physicalTo': cf.physical_to.value,
-							'channelSets': cSets,
-						})
+			logicalChannels = getattr(channel.channelObj, 'logical_channels', None) if channel.channelObj else None
+			if logicalChannels:
+				channelFunctions = [DMXChannelFunction(cf).toDict() for cf in logicalChannels[0].channel_functions]
 			channelData.append({
 				'name': channel.name,
 				'tdChannelName': channel.tdChannelName,
@@ -1162,11 +1151,11 @@ class FixtureExt:
 					'tdChannelName': channel.tdChannelName,
 				}),
 				'normalized': channel.normalized,
-				'byteCount': channel.bitDepth,
+				'bitDepth': channel.bitDepth,
 				'components': channel.components,
 				'geoType': channel.geoType,
 				'instances': channel.instances,
-				'masterControlled': getattr(channel, 'masterControlled', False),
+				'masterControlled': channel.masterControlled,
 				'channelFunctions': channelFunctions,
 			})
 		self._savedChannels = channelData
@@ -1175,7 +1164,7 @@ class FixtureExt:
 
 	def _restoreState(self):
 		"""Reconstruct Python-side objects from stored data without reading the GDTF file."""
-		# Migrate old stored templates that predate geoGroup/uniqueName fields
+		# Migrate old stored templates that predate geoGroup/uniqueName/bitDepth fields
 		for ch in self._channelTemplate:
 			if 'geoGroup' not in ch:
 				ch['geoGroup'] = None
@@ -1183,6 +1172,8 @@ class FixtureExt:
 				ch['uniqueName'] = _chUniqueKey(ch)
 			if 'masterControlled' not in ch:
 				ch['masterControlled'] = False
+			if 'bitDepth' not in ch:
+				ch['bitDepth'] = ch.pop('byteCount', 8)
 
 		# Rebuild a lightweight fixture stub so Modes property works
 		self.fixture = TouchDesignerFixture(

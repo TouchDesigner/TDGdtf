@@ -26,5 +26,9 @@ Backup/
 .DS_Store
 Thumbs.db
 
+# ── Logs & crash dumps ─────────────────────────────
+*.log
+*.stackdump
+
 # ── Claude ─────────────────────────────────────────
 .claude/
