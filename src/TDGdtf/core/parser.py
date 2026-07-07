@@ -1,8 +1,10 @@
 """GDTF file parser that converts a fixture definition into TouchDesigner-ready data structures."""
-import pygdtf
+import logging
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+import pygdtf
 
 from .fixture import (
     BitDepth,
@@ -14,30 +16,33 @@ from .fixture import (
 )
 from .utils import SEQNUMPATTERN, SEQNAMEPATTERN
 
+logger = logging.getLogger(__name__)
+
 
 class GDTFParser:
     """Parses a GDTF file into a TouchDesignerFixture with geometry and DMX channel data."""
 
     def __init__(self):
         self._fixture: Optional[pygdtf.FixtureType] = None
+        self._attrByName: Dict[str, pygdtf.Attribute] = {}
 
     def parseGdtfFile(self, gdtfPath: str) -> TouchDesignerFixture:
         """Parse a GDTF file and return a TouchDesignerFixture object"""
         t0 = time.time()
-        fixture = pygdtf.FixtureType(gdtfPath)
-        print(f'[GDTF TIMER] pygdtf.FixtureType():        {time.time()-t0:.3f}s')
+        try:
+            fixture = pygdtf.FixtureType(gdtfPath)
+        except Exception as exc:
+            raise ValueError(f"Could not parse GDTF file: {gdtfPath}") from exc
+        logger.debug('pygdtf.FixtureType(): %.3fs', time.time() - t0)
         self._fixture = fixture
         self._attrByName = {a.name: a for a in fixture.attributes}
-
-        if self._fixture is None:
-            raise ValueError(f"Could not parse GDTF file: {gdtfPath}")
 
         name = fixture.name or Path(gdtfPath).stem or "Unnamed Fixture"
         manufacturer = fixture.manufacturer or "Unknown Manufacturer"
 
         t1 = time.time()
         modes = self._parseDMXModes(fixture)
-        print(f'[GDTF TIMER] _parseDMXModes():             {time.time()-t1:.3f}s')
+        logger.debug('_parseDMXModes(): %.3fs', time.time() - t1)
 
         return TouchDesignerFixture(
             name=name,
@@ -62,7 +67,7 @@ class GDTFParser:
                 description=i.description,
                 tdGeometries=tdGeoDef
             ))
-            print(f'[GDTF TIMER]   mode "{i.name}" ({len(allChannels)} ch): {time.time()-t:.3f}s')
+            logger.debug('mode %r (%d ch): %.3fs', i.name, len(allChannels), time.time() - t)
         return modes
 
     def _getTdGeoDef(self, channels: List[pygdtf.DmxChannel]) -> Optional[List[TDGeometry]]:
@@ -77,6 +82,9 @@ class GDTFParser:
 
         for c in channels:
             geo = self._fixture.geometries.get_geometry_by_name(c.geometry)
+            if geo is None:
+                logger.warning('Channel %r references unknown geometry %r; channel skipped', c.name, c.geometry)
+                continue
             geoParent = self._fixture.geometries.get_geometry_by_name(geo.parent_name)
             if geo.name not in geos:
                 geos[geo.name] = GeoData(
@@ -90,19 +98,18 @@ class GDTFParser:
         groupedByBaseName = {}
         for geoName, geoData in geos.items():
             basename = SEQNUMPATTERN.sub('', geoName)
-            parentId = id(geoData['geoParent'] if geoData['geoParent'] else None)
+            parentName = geoData['geoParent'].name if geoData['geoParent'] else None
 
-            key = (basename, parentId)
+            key = (basename, parentName)
             if key not in groupedByBaseName:
                 groupedByBaseName[key] = []
             groupedByBaseName[key].append((geoName, geoData))
 
         allGeometries = []
-        for (baseName, parentId), geoList in groupedByBaseName.items():
+        for (baseName, parentName), geoList in groupedByBaseName.items():
             if len(geoList) == 1:
                 geoName, geoData = geoList[0]
-                allChannels = geoData['channels']
-                allChannels = self._optimizeChannels(allChannels, sequential=False)
+                allChannels = self._optimizeChannels(geoData['channels'], sequential=False)
                 tdGeometry = TDGeometry(
                     name=geoData['geo'].name,
                     geoObj=geoData['geo'],
@@ -112,9 +119,7 @@ class GDTFParser:
                     sequentialMembers=None
                 )
             else:
-                sequentialMembers = []
-                for geoName, geoData in geoList:
-                    sequentialMembers.append(geoData['geo'])
+                sequentialMembers = [geoData['geo'] for geoName, geoData in geoList]
 
                 allChannels = self._optimizeChannels(geoList[0][1]['channels'], sequential=True)
 
@@ -131,26 +136,33 @@ class GDTFParser:
         return allGeometries if allGeometries else None
 
     def _optimizeChannels(self, channels: List[pygdtf.DmxChannel], sequential: bool) -> List[TDDMXChannel]:
-        """Optimize the list of channels by merging them based on their activation group and feature."""
+        """Optimize the list of channels by merging them based on their activation group."""
         lastActivationGroup = None
-        mergeChannelList = []
-        returnList = []
-        count = 0
+        mergeChannelList: List[pygdtf.DmxChannel] = []
+        returnList: List[TDDMXChannel] = []
+
+        def _flushMergeList():
+            if not mergeChannelList:
+                return
+            tdChannel = self._createTDDMXChannel(mergeChannelList, sequential, len(returnList) > 0 and sequential)
+            if tdChannel is not None:
+                returnList.append(tdChannel)
+
         for c in channels:
             attribute = self._getAttributeByName(c.attribute.str_link)
-            if attribute:
-                feature = attribute.feature.str_link
+            if attribute is None:
+                logger.warning('Channel %r: attribute %r not found in fixture attribute list; treated as unmergeable',
+                               c.name, c.attribute.str_link)
+                activationGroup = None
+            else:
                 activationGroup = attribute.activation_group.str_link
-                if activationGroup != lastActivationGroup or activationGroup is None or activationGroup == '':
-                    if mergeChannelList:
-                        returnList.append(self._createTDDMXChannel(mergeChannelList, sequential, count > 0 and sequential))
-                        count += 1
-                    mergeChannelList = [c]
-                else:
-                    mergeChannelList.append(c)
-                lastActivationGroup = activationGroup
-        if mergeChannelList:
-            returnList.append(self._createTDDMXChannel(mergeChannelList, sequential, count > 0 and sequential))
+            if not activationGroup or activationGroup != lastActivationGroup:
+                _flushMergeList()
+                mergeChannelList = [c]
+            else:
+                mergeChannelList.append(c)
+            lastActivationGroup = activationGroup
+        _flushMergeList()
         return returnList
 
     def _createTDDMXChannel(self, channelList: List[pygdtf.DmxChannel], sequential: bool, mergeWithAbove: bool) -> Optional[TDDMXChannel]:
@@ -159,6 +171,13 @@ class GDTFParser:
             return None
         firstChannel = channelList[0]
         channelName = firstChannel.name
+        if firstChannel.offset is None:
+            # virtual channel (Offset="None" in GDTF) — has no DMX footprint to patch
+            logger.warning('Skipping virtual channel %r (no DMX offset)', channelName)
+            return None
+        if not firstChannel.logical_channels:
+            logger.warning('Skipping channel %r: no logical channels defined', channelName)
+            return None
         if sequential:
             # remove the sequential number portion from the name (e.g. Beam_12_Color_Add_R → Beam_Color_Add_R)
             match = SEQNAMEPATTERN.search(channelName)
