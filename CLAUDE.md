@@ -21,6 +21,7 @@ op('opName')                  # by name (relative to current COMP)
 op('/project1/base1/opName')  # absolute path
 parent()                      # parent COMP
 parent(2)                     # two levels up
+parent.op('opName')           # using parent shortcut
 me                            # the operator running this script
 ```
 
@@ -28,16 +29,12 @@ me                            # the operator running this script
 ```python
 op('geo1').par.tx             # read parameter
 op('geo1').par.tx = 2.5       # set parameter
-op('geo1').par.tx.val         # .val for the evaluated value
+op('geo1').par.
+op('geo1').par.tx.val         # .val for the constant mode value
+op('geo1').par.tx.eval()      # Evaluate a parameter. This value may be derived by the parameter's constant value, expression, export, or bind, dependent on its mode.
 op('geo1').par.tx.expr        # read/write expression string
 op('geo1').par.tx.mode = ParMode.EXPRESSION
 ```
-
-### Common OP Types
-- `baseCOMP`, `containerCOMP`, `geometryCOMP`
-- `constantCHOP`, `nullCHOP`, `selectCHOP`
-- `glslTOP`, `noiseTOP`, `compositeTOP`
-- `tableDAT`, `textDAT`, `scriptDAT`
 
 ---
 
@@ -49,8 +46,8 @@ op('geo1').par.tx.mode = ParMode.EXPRESSION
 - Avoid default TD names like `base1`, `geo2` — always rename meaningfully
 
 ### Parameters & Variables
-- Python variables: `snake_case`
-- Constants: `ALL_CAPS`
+- Python variables: `camelCase`
+- Constants: `ALLCAPS`
 - Avoid single-letter variables except loop counters (`i`, `j`)
 
 ### Scripts & DATs
@@ -117,23 +114,18 @@ import math
 
 ### OSC / Serial / Web
 Use the built-in `oscin`, `oscout`, `serialDAT`, `webClientDAT` OPs rather than Python
-socket libraries where possible. For custom HTTP, `import requests` may require installing
-via `pip` in TD's Python environment.
+socket libraries where possible.
 
 ---
 
 ## Help & Reference Pages
 
 <!-- Replace these placeholder URLs with your actual bookmarks -->
-- **TD Python Reference:** https://docs.derivative.ca/Python_Reference
-- **TDILib:** file:///C:/Program Files/Derivative/TouchDesigner.2025.32460/bin/Lib/tdi
-- **Offline Help:** file:///C:/Program Files/Derivative/TouchDesigner.2025.32460/Samples/Learn/OfflineHelp/https.docs.derivative.ca
+- **TouchDesigner Documentation** https://docs.derivative.ca
+- **TouchDesigner Forum** https://forum.derivative.ca
+- **TDILib:** file:///C:/Program Files/Derivative/TouchDesigner.2025.33025/bin/Lib/tdi
+- **Offline Help:** file:///C:/Program Files/Derivative/TouchDesigner.2025.33025/Samples/Learn/OfflineHelp/https.docs.derivative.ca
 - **GDTF Documentation:** https://www.gdtf.eu/gdtf
-
-<!-- Add your own references below, e.g.:
-- **Studio Shared Components:** file:///path/to/shared/tox/library
-- **Project Wiki:** https://your-internal-wiki.com/touchdesigner
--->
 
 ---
 
