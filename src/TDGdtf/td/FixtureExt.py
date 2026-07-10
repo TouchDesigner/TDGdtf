@@ -340,18 +340,28 @@ class FixtureExt:
 	# ── Properties ──────────────────────────────────────────
 
 	@property
-	def Modes(self) -> DMXModeInfo:
-		"""Currently active DMXModeInfo."""
-		return self.fixture.dmxModes[self._modes]
+	def Modes(self) -> Optional[DMXModeInfo]:
+		"""Currently active DMXModeInfo, or None when no fixture is loaded."""
+		if self.fixture is None or not self.fixture.dmxModes:
+			return None
+		return self.fixture.dmxModes[min(self._modes, len(self.fixture.dmxModes) - 1)]
 
 	@Modes.setter
 	def Modes(self, value: Par):
 		"""Switch to a different DMX mode, parsing the file first if needed.
+		Ignored when no fixture is loaded (e.g. after Reset).
 
 		Args:
 			value: TD menu parameter value (uses .menuIndex to select the mode).
 		"""
-		self._modes = value.menuIndex
+		if self.fixture is None or not self.fixture.dmxModes:
+			self._log.debug('Modes change ignored: no fixture loaded')
+			return
+		menuIndex = value.menuIndex
+		if menuIndex is None or not (0 <= menuIndex < len(self.fixture.dmxModes)):
+			self._log.warning('Modes change ignored: invalid menu index %r', menuIndex)
+			return
+		self._modes = menuIndex
 		mode = self.fixture.dmxModes[self._modes]
 		if mode.tdGeometries is None:
 			self.Parse()
