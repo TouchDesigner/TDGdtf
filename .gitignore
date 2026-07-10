@@ -29,6 +29,7 @@ Thumbs.db
 # ── Logs & crash dumps ─────────────────────────────
 *.log
 *.stackdump
+*.dmp
 
 # ── Claude ─────────────────────────────────────────
 .claude/
