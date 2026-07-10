@@ -136,7 +136,14 @@ class GDTFParser:
         return allGeometries if allGeometries else None
 
     def _optimizeChannels(self, channels: List[pygdtf.DmxChannel], sequential: bool) -> List[TDDMXChannel]:
-        """Optimize the list of channels by merging them based on their activation group."""
+        """Optimize the list of channels by merging them based on their activation group.
+
+        Consecutive channels sharing an activation group are merged into one
+        multi-component channel only when they are homogeneous: same bit depth and
+        exactly one channel function each (see _mergeIncompatibilityReason). The DMX
+        Fixture POP cannot mix bit depths within one channel block, and a merged
+        component cannot expose per-component channel functions.
+        """
         lastActivationGroup = None
         mergeChannelList: List[pygdtf.DmxChannel] = []
         returnList: List[TDDMXChannel] = []
@@ -156,7 +163,14 @@ class GDTFParser:
                 activationGroup = None
             else:
                 activationGroup = attribute.activation_group.str_link
-            if not activationGroup or activationGroup != lastActivationGroup:
+            startNewGroup = not activationGroup or activationGroup != lastActivationGroup
+            if not startNewGroup and mergeChannelList:
+                reason = self._mergeIncompatibilityReason(c, mergeChannelList[0])
+                if reason is not None:
+                    logger.info('Not merging channel %r into %r despite shared activation group %r: %s',
+                                c.name, mergeChannelList[0].name, activationGroup, reason)
+                    startNewGroup = True
+            if startNewGroup:
                 _flushMergeList()
                 mergeChannelList = [c]
             else:
@@ -164,6 +178,24 @@ class GDTFParser:
             lastActivationGroup = activationGroup
         _flushMergeList()
         return returnList
+
+    @staticmethod
+    def _channelFunctionCount(channel: pygdtf.DmxChannel) -> int:
+        """Number of channel functions on the channel's first logical channel."""
+        if not channel.logical_channels:
+            return 0
+        return len(channel.logical_channels[0].channel_functions)
+
+    @staticmethod
+    def _mergeIncompatibilityReason(candidate: pygdtf.DmxChannel, first: pygdtf.DmxChannel) -> Optional[str]:
+        """Why candidate cannot join a vector merge started by first; None when compatible."""
+        if candidate.offset is None or first.offset is None:
+            return 'virtual channel (no DMX offset)'
+        if len(candidate.offset) != len(first.offset):
+            return 'bit depth {} vs {}'.format(len(candidate.offset) * 8, len(first.offset) * 8)
+        if GDTFParser._channelFunctionCount(candidate) != 1 or GDTFParser._channelFunctionCount(first) != 1:
+            return 'channels with multiple channel functions cannot be vector components'
+        return None
 
     def _createTDDMXChannel(self, channelList: List[pygdtf.DmxChannel], sequential: bool, mergeWithAbove: bool) -> Optional[TDDMXChannel]:
         """Create a TDDMXChannel from a list of pygdtf.DmxChannel"""

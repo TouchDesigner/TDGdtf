@@ -15,6 +15,7 @@ All parsed data — the channel template, fixture instances, groups, and every c
 ### Parsing behavior
 
 - The currently selected DMX mode is preserved by name when re-parsing; if the new file has no mode with that name, the first mode is used.
+- Consecutive channels sharing a GDTF ActivationGroup (e.g. `ColorAdd_R/G/B`) are merged into one multi-component vector channel — but only when all channels have the same bit depth and exactly one channel function each. Incompatible channels (e.g. a 16-bit `Gobo1Pos` next to an 8-bit `Gobo1PosRotate`) stay separate, since a DMX channel block cannot mix bit depths and a vector component cannot expose its own function menu.
 - GDTF *virtual* channels (channels without a DMX offset) have no DMX footprint and are skipped with a warning.
 - Channels whose attribute is missing from the fixture's attribute list are kept but logged as a warning, and are never merged with neighbouring channels.
 - Channel names are sanitized into TD parameter names; if two different attributes sanitize to the same parameter name, a warning is logged and only the first one gets parameters.
