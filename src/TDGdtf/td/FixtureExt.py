@@ -771,6 +771,10 @@ class FixtureExt:
 		# layout created operators
 		self.ownerComp.layout(self.ownerComp.findChildren(tags=[tag]))
 
+		# force cook the master tables
+		self.ownerComp.op('table_pointMaster').cook(force=True)
+		self.ownerComp.op('table_primMaster').cook(force=True)
+
 	# ── Private Helpers ─────────────────────────────────────
 
 	def _afterValueChange(self, attrName: str, roles: Optional[Set[str]] = None):
