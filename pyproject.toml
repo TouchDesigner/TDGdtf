@@ -17,8 +17,8 @@ classifiers = [
 dependencies = ["pygdtf"]
 
 [project.urls]
-Repository = "https://gitlab2.derivative.ca/Derivative/TDGdtf"
-Issues = "https://gitlab2.derivative.ca/Derivative/TDGdtf/-/issues"
+Repository = "https://github.com/TouchDesigner/TDGdtf"
+Issues = "https://github.com/TouchDesigner/TDGdtf/issues"
 
 [project.optional-dependencies]
 dev = [

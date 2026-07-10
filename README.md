@@ -1,6 +1,6 @@
 # TDGdtf
 
-A TouchDesigner tool that parses GDTF fixture files and builds component networks with POP geometry, DMX channel attributes, and a full parameter UI.
+A TouchDesigner tool that parses [GDTF](https://gdtf-share.com) fixture files and builds component networks with POP geometry, DMX channel attributes, and a full parameter UI.
 
 ## Setup
 
@@ -8,7 +8,20 @@ A TouchDesigner tool that parses GDTF fixture files and builds component network
 2. Call `Parse()` to read the file, build the operator network, and create channel parameters.
 3. Use the **Modes** property or the mode menu parameter to switch DMX modes.
 
-Fixture instances, groups, and channel values are persisted via TouchDesigner's StorageManager and survive project restarts without needing to re-parse the GDTF file.
+### State persistence
+
+All parsed data — the channel template, fixture instances, groups, and every channel value — is persisted via TouchDesigner's StorageManager. Values are saved on every change, so the component fully restores its state after a project restart without re-reading the GDTF file.
+
+### Parsing behavior
+
+- The currently selected DMX mode is preserved by name when re-parsing; if the new file has no mode with that name, the first mode is used.
+- GDTF *virtual* channels (channels without a DMX offset) have no DMX footprint and are skipped with a warning.
+- Channels whose attribute is missing from the fixture's attribute list are kept but logged as a warning, and are never merged with neighbouring channels.
+- Channel names are sanitized into TD parameter names; if two different attributes sanitize to the same parameter name, a warning is logged and only the first one gets parameters.
+
+### Logging
+
+The component writes structured logs to `tdgdtf_fixture.log` in the project folder. Every record is tagged with the path of the component that produced it (or `core` for records from the parser modules). The file logs at DEBUG level and includes parse timings, state restores, and all warnings described above.
 
 ---
 
@@ -28,13 +41,14 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 | Method | Description |
 |---|---|
 | `DmxChannel(name)` | Return the `tdu.Dependency` for a single channel by name, or `None` if not found. |
+| `GetDmxChannelValues(name)` | Return a flat list of DMX values for a channel across all groups and fixtures. |
 
 ### Properties
 
 | Property | Type | Description |
 |---|---|---|
 | `Modes` | get/set | Get the current `DMXModeInfo` object. Assign a TD menu parameter value (with `.menuIndex`) to switch modes and rebuild the network. |
-| `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. Each dependency's `.val` is a list of DMX values, one entry per fixture instance. Updates automatically when values change. |
+| `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. See [Retrieving Values](#retrieving-values) for the dependency value shapes. |
 | `DmxChannelsByType` | dict (read-only) | Dict with `'point'` and `'primitive'` keys, each a deduplicated list of attribute names by geometry type. |
 | `MasterControlledChannelsByType` | dict (read-only) | Same shape as `DmxChannelsByType` but filtered to channels whose GDTF `LogicalChannel.master` is `"Grand"`. Channels with `"Group"` or `"None"` master are excluded. |
 
@@ -43,7 +57,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 ### Fixture Management
 
 #### `AddFixture(label='')`
-Create a new fixture instance. Returns the auto-incremented fixture ID (`int`).
+Create a new fixture instance. Returns the fixture ID (`int`, lowest available).
 
 ```python
 fid = op('yourComp').AddFixture('Stage Left')
@@ -58,7 +72,7 @@ op('yourComp').RemoveFixture(0)
 ```
 
 #### `SetFixtureCount(count)`
-Add or remove fixture instances to reach the desired total count. When removing, the highest IDs are removed first.
+Add or remove fixture instances to reach the desired total count. When removing, the highest IDs are removed first. Menus, storage, and dependencies are refreshed once at the end, so this is the efficient way to create many fixtures.
 
 ```python
 op('yourComp').SetFixtureCount(8)
@@ -128,6 +142,8 @@ All setter methods accept a `target` parameter that controls which fixture insta
 | `'groupName'` | All fixtures in a named group |
 | `'0,2,front'` | Comma-separated mix of IDs and group names |
 
+`channelName` may be an attribute name (updates the channel in all geometry groups) or a group-qualified unique name like `'body_beam_Dimmer'` (updates one group only).
+
 #### `SetDmxValue(channelName, value, target='all')`
 Set the raw DMX integer value on a channel.
 
@@ -153,7 +169,7 @@ op('yourComp').SetFunction('Gobo1', 1)
 ```
 
 #### `SetFunctionValue(channelName, value, target='all')`
-Set a physical function value (in the function's physical units). The value is automatically converted to the corresponding DMX value based on the current channel function's physical-to-DMX mapping.
+Set a physical function value (in the function's physical units). The value is automatically converted to the corresponding DMX value based on the current channel function's physical-to-DMX mapping. Channel functions with a zero-width physical range map to the start of their DMX range.
 
 ```python
 op('yourComp').SetFunctionValue('Pan', 180.0)
@@ -172,14 +188,30 @@ op('yourComp').SetChannelSet('Color1', 3)
 ### Retrieving Values
 
 #### `DmxChannel(name)`
-Return the `tdu.Dependency` object for a single channel, or `None` if the channel name is not found. The dependency's `.val` holds a list of DMX values, one per fixture instance (ordered by fixture index).
+Return the `tdu.Dependency` object for a single channel, or `None` if the channel name is not found. Because these are `tdu.Dependency` objects, any operator expression referencing `.val` automatically re-cooks when the values change.
+
+The shape of `.val` depends on the channel:
+
+| Channel | `.val` shape |
+|---|---|
+| Single geometry group | `[valuePerFixture, ...]` — one entry per fixture instance |
+| Multiple geometry groups (same attribute) | `{geoGroup: [valuePerFixture, ...]}` |
+
+Each per-fixture value is in turn:
+
+| Channel kind | Per-fixture value |
+|---|---|
+| Single component | scalar — `float` (0–1) if normalized, `int` (raw DMX) otherwise |
+| Multi-component (e.g. RGB) | tuple, e.g. `(1.0, 0.5, 0.0)` |
+| Sequential geometry (n instances) | list of n values, one per geometry member |
 
 ```python
 dep = op('yourComp').DmxChannel('Pan')
-dep.val   # [128, 200, 50]
-```
+dep.val   # [128, 200, 50]  — one raw DMX value per fixture
 
-Because these are `tdu.Dependency` objects, any operator expression referencing `.val` will automatically re-cook when the values change.
+op('yourComp').DmxChannel('ColorRGBI').val
+# [(1.0, 0.5, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]  — normalized RGBI per fixture
+```
 
 #### `DmxChannels` (property)
 Return a dict of all channel dependencies: `{channelName: tdu.Dependency}`.
@@ -189,11 +221,12 @@ channels = op('yourComp').DmxChannels
 channels['Tilt'].val   # [90, 45, 180]
 ```
 
-For multi-component channels (e.g. normalized RGBI), each entry in the list is a tuple:
+#### `GetDmxChannelValues(channelName)`
+Return a flat list of all DMX values for a channel across all geometry groups and fixture instances. Useful when a channel spans multiple geometry groups or sequential geometries and you want a single ordered list instead of the nested dict/list structure that `DmxChannel().val` returns.
 
 ```python
-op('yourComp').DmxChannel('ColorRGBI').val
-# [(1.0, 0.5, 0.0, 1.0), (0.0, 0.0, 1.0, 1.0)]
+op('yourComp').GetDmxChannelValues('Pan')
+# [128, 200, 50]  — one value per fixture, groups concatenated
 ```
 
 #### `DmxChannelsByType` (property)
@@ -212,16 +245,33 @@ op('yourComp').MasterControlledChannelsByType
 # {'point': [], 'primitive': ['Dimmer', 'BackgroundDimmer']}
 ```
 
-#### `GetDmxChannelValues(channelName)`
-Return a flat list of all DMX values for a channel across all geometry groups and fixture instances. Useful when a channel spans multiple geometry groups (e.g. a sequential fixture) and you want a single ordered list instead of the nested dict/list structure that `DmxChannel().val` returns.
+---
 
-```python
-op('yourComp').GetDmxChannelValues('Pan')
-# [128, 200, 50]  — one value per fixture, groups concatenated
+## Development
+
+The Python package lives in `src/TDGdtf` with a standard src layout:
+
 ```
+src/TDGdtf/
+├── core/           # TD-independent: GDTF parsing and data classes
+│   ├── parser.py   #   GDTFParser — pygdtf → TouchDesignerFixture
+│   ├── fixture.py  #   data classes and serializable channel functions
+│   └── utils.py    #   TD parameter name sanitization
+├── td/             # TouchDesigner-only (references project, tdu, op)
+│   └── FixtureExt.py  # COMP extension: network builder, params, instances
+└── tdgdtfFixture.tox  # packaged component
+```
+
+Requires Python 3.11+ and [pygdtf](https://pypi.org/project/pygdtf/). The `core` package can be developed and tested outside TouchDesigner:
+
+```bash
+pip install -e .[dev]
+```
+
+Sample GDTF files for testing are in `gdtfSampleFiles/`.
 
 ---
 
 ## License
 
-See [LICENSE](LICENSE).
+Shared Use License, Derivative Inc. — see [LICENSE](LICENSE).
