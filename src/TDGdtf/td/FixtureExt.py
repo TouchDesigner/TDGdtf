@@ -595,6 +595,55 @@ class FixtureExt:
 		self.CreateNetwork(fixture.dmxModes[modeIndex], myTime=t0)
 		self._log.info('Parse complete (%s %s, %d modes): %.3fs', fixture.manufacturer, fixture.name, len(fixture.dmxModes), time.time() - t0)
 
+	def Reset(self):
+		"""Reset the component to an empty state.
+
+		Destroys the generated operator network, removes all channel parameters,
+		and clears runtime and persisted fixture data — as if no GDTF file had
+		ever been parsed. The Gdtffile parameter is left untouched.
+		"""
+		self._log.info('Reset: clearing network, parameters, and stored state')
+		self._clearNetwork()
+
+		# runtime state
+		self.fixture = None
+		self._modes = 0
+		self._fixtureInstances = []
+		self._fixtureGroups = {}
+		self._channelTemplate = []
+		self._channelByName = {}
+		self._chsByAttrName = {}
+		self._parLookup = {}
+		self._dmxDeps = {}
+
+		# persisted state
+		self._fixtureName = ''
+		self._fixtureManufacturer = ''
+		self._modeMenu = tdu.MenuObject([], menuLabels=[])
+		self._savedChannels = []
+		self._savedModes = []
+		self._fixtures = []
+		self._groups = {}
+
+	def _clearNetwork(self):
+		"""Destroy all generated (tagged) operators, reset the fixture POP's DMX
+		channel sequence, and remove the Channel Functions page parameters.
+		Returns the fixture POP."""
+		# delete all nodes associated with this tag
+		for operator in self.ownerComp.findChildren(tags=[tag]):
+			operator.destroy()
+		# clear out the fixtureOp's sequential dmx channels
+		fixtureOp = self.ownerComp.op('fixture')
+		fixtureOp.seq.dmxchan.numBlocks = 1
+		for parGroup in fixtureOp.seq.dmxchan.blocks[0].parGroup:
+			parGroup.reset()
+
+		# clear out custom parameters for the Channel Functions page
+		channelFunctionsPage = self.ownerComp.customPages['Channel Functions']
+		for parGroup in channelFunctionsPage.parGroups:
+			parGroup.destroy()
+		return fixtureOp
+
 	def CreateNetwork(self, dmxMode: Optional[DMXModeInfo] = None, myTime: float = 0):
 		"""
 		Create the TouchDesigner network for the fixture based on the parsed GDTF data.
@@ -612,20 +661,7 @@ class FixtureExt:
 		if dmxMode is None:
 			dmxMode = self.fixture.dmxModes[0]
 
-		# delete all nodes associated with this tag
-		for operator in self.ownerComp.findChildren(tags=[tag]):
-			operator.destroy()
-		# clear out the fixtureOp's sequential dmx channels
-		fixtureOp = self.ownerComp.op('fixture')
-		fixtureOp.seq.dmxchan.numBlocks = 1
-		for parGroup in fixtureOp.seq.dmxchan.blocks[0].parGroup:
-			parGroup.reset()
-
-		# clear out custom parameters for the Channel Functions page
-		channelFunctionsPage = self.ownerComp.customPages['Channel Functions']
-		for parGroup in channelFunctionsPage.parGroups:
-			parGroup.destroy()
-
+		fixtureOp = self._clearNetwork()
 		self._log.debug('CreateNetwork: cleanup old ops/params: %.3fs', time.time() - myTime)
 		allChannels = []
 		# first get the geometries

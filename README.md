@@ -56,6 +56,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 |---|---|
 | `Parse()` | Parse the GDTF file set in the **Gdtffile** parameter and build the operator network. Preserves the currently selected mode by name; falls back to the first mode if no match exists in the new file. |
 | `CreateNetwork(dmxMode=None)` | Rebuild the operator network for a specific DMX mode. Called automatically by `Parse()` and the `Modes` setter. |
+| `Reset()` | Reset the component to an empty state: destroy the generated network, remove all channel parameters, and clear runtime and persisted fixture data (fixtures, groups, values, modes). The **Gdtffile** parameter is left untouched. |
 
 ### Methods
 
