@@ -7,10 +7,11 @@ A TouchDesigner tool that parses [GDTF](https://gdtf-share.com) fixture files an
 ### Installation
 
 Install the package into a Python virtual environment used by TouchDesigner (e.g. one
-managed by TD's Python Environment Manager):
+managed by TD's Python Environment Manager). The package is not on a public index, so
+install straight from GitHub (or from a local clone with `pip install <path>`):
 
 ```bash
-pip install TDGdtf
+pip install git+https://github.com/TouchDesigner/TDGdtf.git
 ```
 
 The packaged component (`tdgdtfFixture.tox`) ships inside the package. To load it, create
