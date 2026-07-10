@@ -59,9 +59,6 @@ exclude = [
 [tool.touchdesigner]
 requiresTouchDesigner = "2025.32779"
 
-[tool.touchdesigner.tdpackagemanager]
-readIndexUrls = ["https://gitlab2.derivative.ca/api/v4/projects/176/packages/pypi/simple"]
-
 [tool.touchdesigner.TDPyEnvManagerContext]
 contextVersion = 2
 createdByVersion = "1.4.3"
