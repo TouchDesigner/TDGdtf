@@ -625,6 +625,14 @@ class FixtureExt:
 		self._fixtures = []
 		self._groups = {}
 
+		# force cook the master tables
+		self.ownerComp.op('table_pointMaster').cook(force=True)
+		self.ownerComp.op('table_primMaster').cook(force=True)
+		# force cook channel script POPs
+		self.ownerComp.op('script_pointChannels').cook(force=True)
+		self.ownerComp.op('script_primChannels').cook(force=True)
+
+
 	def _clearNetwork(self):
 		"""Destroy all generated (tagged) operators, reset the fixture POP's DMX
 		channel sequence, and remove the Channel Functions page parameters.
@@ -810,6 +818,10 @@ class FixtureExt:
 		# force cook the master tables
 		self.ownerComp.op('table_pointMaster').cook(force=True)
 		self.ownerComp.op('table_primMaster').cook(force=True)
+
+		# force cook channel script POPs
+		self.ownerComp.op('script_pointChannels').cook(force=True)
+		self.ownerComp.op('script_primChannels').cook(force=True)
 
 	# ── Private Helpers ─────────────────────────────────────
 
