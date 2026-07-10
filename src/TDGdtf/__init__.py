@@ -17,7 +17,7 @@ __version__ = "0.1.10"
 __td_requires_touchdesigner__ = "2025.32779.24"
 __td_package_type__ = "singleton"
 __td_collection__ = {
-    "TDGdtfFixture": Path(resources.files(__package__) / "tdgdtfFixture.tox"),
+    "TDGdtfFixture": Path(str(resources.files(__package__) / "tdgdtfFixture.tox")),
 }
 
 
@@ -37,4 +37,4 @@ def toxPaths() -> dict[str, Path]:
 
 def assetsPath() -> Path:
     """Return the path to the packaged assets directory."""
-    return Path(resources.files(__package__) / "assets")
+    return Path(str(resources.files(__package__) / "assets"))

@@ -271,6 +271,21 @@ pip install -e .[dev]
 
 Sample GDTF files for testing are in `gdtfSampleFiles/`.
 
+### Typing
+
+The stored channel-template schema is typed via `TypedDict`s in `core/fixture.py`
+(`ChannelTemplate`, `ChannelFunctionDict`, `ChannelSetDict`). The TD-independent core is
+checked with mypy (configured in `pyproject.toml`):
+
+```bash
+python -m mypy
+```
+
+`td/FixtureExt.py` annotates TouchDesigner types (`COMP`, `Par`, `tdu.Dependency`) via
+[tdi](https://github.com/touchdesigner/tdi), Derivative's interface library shipped in
+`<TouchDesigner>/bin/Lib/tdi`. It is imported under `typing.TYPE_CHECKING` only, so IDEs
+and linters resolve TD builtins while nothing extra is imported at runtime.
+
 ---
 
 ## License

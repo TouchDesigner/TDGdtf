@@ -25,6 +25,7 @@ dev = [
   "build>=1.2.2",
   "twine>=5.1.1",
   "pytest>=8.0.0",
+  "mypy>=1.10",
 ]
 
 [tool.setuptools]
@@ -55,6 +56,18 @@ exclude = [
   "*.__pycache__",
   "*.__pycache__.*",
 ]
+
+# Type checking covers the TD-independent core package. FixtureExt.py runs only
+# inside TouchDesigner (td builtins); its annotations resolve via the tdi library
+# shipped in <TouchDesigner>/bin/Lib when analyzed from TD's VSCode integration.
+[tool.mypy]
+files = ["src/TDGdtf/core", "src/TDGdtf/__init__.py"]
+python_version = "3.11"
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "pygdtf.*"
+ignore_missing_imports = true
 
 [tool.touchdesigner]
 requiresTouchDesigner = "2025.32779"

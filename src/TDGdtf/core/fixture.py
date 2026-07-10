@@ -1,8 +1,10 @@
 """Data classes representing a parsed GDTF fixture for use in TouchDesigner."""
+from __future__ import annotations
+
 import pygdtf
 from dataclasses import dataclass
-from typing import List, Any, Optional, TypedDict
 from enum import IntEnum
+from typing import List, Optional, TypedDict
 
 
 class BitDepth(IntEnum):
@@ -17,8 +19,50 @@ class GeoData(TypedDict):
     """Intermediate grouping of a geometry and its raw GDTF DMX channels."""
 
     geo: pygdtf.Geometry
-    geoParent: pygdtf.Geometry
+    geoParent: Optional[pygdtf.Geometry]  # None for top-level geometries
     channels: List[pygdtf.DmxChannel]
+
+
+class ChannelSetDict(TypedDict):
+    """Serialized DMXChannelSet as produced by DMXChannelSet.toDict."""
+
+    name: str
+    dmxFrom: float
+    dmxTo: float
+    physicalFrom: float
+    physicalTo: float
+
+
+class ChannelFunctionDict(TypedDict):
+    """Serialized DMXChannelFunction as produced by DMXChannelFunction.toDict."""
+
+    name: str
+    dmxFrom: float
+    dmxTo: float
+    default: float
+    physicalFrom: float
+    physicalTo: float
+    channelSets: List[ChannelSetDict]
+
+
+class ChannelTemplate(TypedDict):
+    """One channel of the stored channel template (FixtureExt._saveState schema).
+
+    This is the persisted, TD-independent description of a DMX channel that
+    fixture instances, custom parameters, and dependencies are built from.
+    """
+
+    name: str
+    tdChannelName: Optional[str]
+    geoGroup: Optional[str]
+    uniqueName: str
+    normalized: bool
+    bitDepth: int
+    components: int
+    geoType: str
+    instances: int
+    masterControlled: bool
+    channelFunctions: List[ChannelFunctionDict]
 
 
 @dataclass
@@ -45,7 +89,7 @@ class TDGeometry:
     """Information about a single geometry"""
     name: str
     geoObj: pygdtf.Geometry  # The geometry object from the GDTF file
-    parent: pygdtf.Geometry
+    parent: Optional[pygdtf.Geometry]  # None for top-level geometries
     isSequential: bool = False
     sequentialMembers: Optional[List[pygdtf.Geometry]] = None  # List of geometries that are members of this sequence
     tdDmxChannels: Optional[List[TDDMXChannel]] = None  # List of DMX channels that are part of this geometry
@@ -57,8 +101,6 @@ class DMXModeInfo:
     name: str
     description: str
     tdGeometries: Optional[List[TDGeometry]] = None  # Which geometries are used in this mode
-    tdChannels: Optional[List[TDDMXChannel]] = None  # List of DMX channels in this mode
-    totalTdChannels: Optional[int] = 0  # Total number of DMX channels in this mode
 
 
 @dataclass
@@ -66,13 +108,14 @@ class TouchDesignerFixture:
     """Complete fixture data structure for TouchDesigner"""
     name: str
     manufacturer: str
-    attributes: List[Any]
     dmxModes: List[DMXModeInfo]  # All available DMX modes
+
 
 class _ScalarValue:
     """Minimal stand-in for pygdtf numeric range objects (.value attribute)."""
-    def __init__(self, value):
+    def __init__(self, value: float):
         self.value = value
+
 
 class DMXChannelSet:
     """A named range within a channel function mapping DMX bytes to a physical value span."""
@@ -83,11 +126,11 @@ class DMXChannelSet:
         Args:
             channelSet: pygdtf ChannelSet to read name and DMX/physical ranges from.
         """
-        self.name = channelSet.name
+        self.name: str = channelSet.name
         self.dmxRange = (channelSet.dmx_from, channelSet.dmx_to)
         self.physicalRange = (channelSet.physical_from, channelSet.physical_to)
-    
-    def toDict(self) -> dict:
+
+    def toDict(self) -> ChannelSetDict:
         """Serialise to a plain dict for storage."""
         return {
             'name': self.name,
@@ -98,7 +141,7 @@ class DMXChannelSet:
         }
 
     @classmethod
-    def fromDict(cls, d: dict) -> 'DMXChannelSet':
+    def fromDict(cls, d: ChannelSetDict) -> DMXChannelSet:
         """Reconstruct from a plain dict as produced by toDict.
 
         Args:
@@ -110,6 +153,7 @@ class DMXChannelSet:
         obj.physicalRange = (_ScalarValue(d['physicalFrom']), _ScalarValue(d['physicalTo']))
         return obj
 
+
 class DMXChannelFunction:
     """One functional range of a logical DMX channel (e.g. 'Dimmer' 0-255)."""
 
@@ -120,14 +164,14 @@ class DMXChannelFunction:
             channelFunction: pygdtf ChannelFunction to read ranges and channel sets from.
         """
 
-        def _loadChannelSets():
+        def _loadChannelSets() -> List[DMXChannelSet]:
             cSets = []
             for channelSet in channelFunction.channel_sets:
                 if len(channelSet.name):
                     cSets.append(DMXChannelSet(channelSet))
             return cSets
 
-        self.name = channelFunction.name
+        self.name: str = channelFunction.name
         self.dmxRange = (channelFunction.dmx_from, channelFunction.dmx_to)
         self.default = channelFunction.default
         self.physicalRange = (channelFunction.physical_from, channelFunction.physical_to)
@@ -135,7 +179,7 @@ class DMXChannelFunction:
 
         self.value: int = 0
 
-    def toDict(self) -> dict:
+    def toDict(self) -> ChannelFunctionDict:
         """Serialise to a plain dict for storage."""
         return {
             'name': self.name,
@@ -148,7 +192,7 @@ class DMXChannelFunction:
         }
 
     @classmethod
-    def fromDict(cls, d: dict) -> 'DMXChannelFunction':
+    def fromDict(cls, d: ChannelFunctionDict) -> DMXChannelFunction:
         """Reconstruct from a plain dict as produced by toDict.
 
         Args:

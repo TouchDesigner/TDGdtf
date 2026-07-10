@@ -1,8 +1,10 @@
 """GDTF file parser that converts a fixture definition into TouchDesigner-ready data structures."""
+from __future__ import annotations
+
 import logging
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import pygdtf
 
@@ -47,7 +49,6 @@ class GDTFParser:
         return TouchDesignerFixture(
             name=name,
             manufacturer=manufacturer,
-            attributes=[],
             dmxModes=modes
         )
 
@@ -77,8 +78,9 @@ class GDTFParser:
         """
         if not channels:
             return None
+        assert self._fixture is not None, 'parseGdtfFile must run before _getTdGeoDef'
 
-        geos = {}
+        geos: Dict[str, GeoData] = {}
 
         for c in channels:
             geo = self._fixture.geometries.get_geometry_by_name(c.geometry)
@@ -95,7 +97,7 @@ class GDTFParser:
             else:
                 geos[geo.name]['channels'].append(c)
 
-        groupedByBaseName = {}
+        groupedByBaseName: Dict[Tuple[str, Optional[str]], List[Tuple[str, GeoData]]] = {}
         for geoName, geoData in geos.items():
             basename = SEQNUMPATTERN.sub('', geoName)
             parentName = geoData['geoParent'].name if geoData['geoParent'] else None
