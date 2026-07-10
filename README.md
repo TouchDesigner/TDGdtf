@@ -69,7 +69,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 
 | Property | Type | Description |
 |---|---|---|
-| `Modes` | get/set | Get the current `DMXModeInfo` object. Assign a TD menu parameter value (with `.menuIndex`) to switch modes and rebuild the network. |
+| `Modes` | get/set | Get the current `DMXModeInfo` object, or `None` when no fixture is loaded (e.g. after `Reset()`). Assign a TD menu parameter value (with `.menuIndex`) to switch modes and rebuild the network; assignments are ignored while no fixture is loaded. |
 | `DmxChannels` | dict (read-only) | Dict of `{channelName: tdu.Dependency}`. See [Retrieving Values](#retrieving-values) for the dependency value shapes. |
 | `DmxChannelsByType` | dict (read-only) | Dict with `'point'` and `'primitive'` keys, each a deduplicated list of attribute names by geometry type. |
 | `MasterControlledChannelsByType` | dict (read-only) | Same shape as `DmxChannelsByType` but filtered to channels whose GDTF `LogicalChannel.master` is `"Grand"`. Channels with `"Group"` or `"None"` master are excluded. |
