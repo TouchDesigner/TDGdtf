@@ -4,8 +4,28 @@ A TouchDesigner tool that parses [GDTF](https://gdtf-share.com) fixture files an
 
 ## Setup
 
+### Installation
+
+Install the package into a Python virtual environment used by TouchDesigner (e.g. one
+managed by TD's Python Environment Manager). The package is not on a public index, so
+install straight from GitHub (or from a local clone with `pip install <path>`):
+
+```bash
+pip install git+https://github.com/TouchDesigner/TDGdtf.git
+```
+
+The packaged component (`tdgdtfFixture.tox`) ships inside the package. To load it, create
+a **Base COMP** and set its **External .tox** parameter to the packaged file using an
+expression:
+
+```python
+mod.TDGdtf.toxPath('TDGdtfFixture')
+```
+
+### Creating a fixture component
+
 1. Set the **Gdtffile** parameter on the component to point at a `.gdtf` file.
-2. Call `Parse()` to read the file, build the operator network, and create channel parameters.
+2. Press **Parse** to read the file, build the operator network, and create channel parameters (or call `Parse()` from Python).
 3. Use the **Modes** property or the mode menu parameter to switch DMX modes.
 
 ### State persistence
