@@ -2,6 +2,25 @@
 
 A TouchDesigner tool that parses [GDTF](https://gdtf-share.com) fixture files and builds component networks with POP geometry, DMX channel attributes, and a full parameter UI.
 
+Once a fixture is loaded, the component can be used to control all fixtures of that type present in a setup. The first input of the component should be a Point POP with the number of points equaling the number fixtures of this type in the installation. A limiting factor is that all the fixtures should also be using the same DMX Mode. If the same fixture is present multiple times, but running with different DMX Modes, extra TDGdtf fixture components are required.
+
+To deal with fixture addressing, the Point POP can use the Point attributes:
+* `DMXFixtureNet`
+* `DMXFixtureSubnet`
+* `DMXFixtureUniverse`
+* `DMXFixtureChannel`
+* `DMXFixtureNetAddress`
+
+to control the DMX addressing of the individual fixtures.
+
+To connect the fixtures to a DMX Out POP, reference the internal DMX Fixture POP called "fixture".
+
+The parameters to control the fixture are automatically created and by default all fiixtures of that type are controlled via these parameters at the same time. You can control individual fixtures by selecting them via the `Control Target` parameter on the "Channnel Functions" page.
+
+Individual control is also possible via setting existing point or primitive attributes. This can be done by using the TDGdtf component's first output, modifying an existing attribute and wireing it back into the second input of the component. While a bit untraditional, this allows to do all manipulations outside the component without having to make any changes internaly.
+
+A range of python methods exist to create groups, set values for channel functions of all, individual fixtures, or fixture groups. All availale methods are listed below. This can get a bit heavy for larger setups, so controlling fixtures via attributes is the intended and prefered way of working.
+
 ## Setup
 
 ### Installation
@@ -27,6 +46,8 @@ mod.TDGdtf.toxPath('TDGdtfFixture')
 1. Set the **Gdtffile** parameter on the component to point at a `.gdtf` file.
 2. Press **Parse** to read the file, build the operator network, and create channel parameters (or call `Parse()` from Python).
 3. Use the **Modes** property or the mode menu parameter to switch DMX modes.
+
+
 
 ### State persistence
 
