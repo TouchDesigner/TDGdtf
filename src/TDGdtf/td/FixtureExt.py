@@ -495,6 +495,10 @@ class FixtureExt:
 					result.append(fiVal)
 		return result
 
+	def PersistState(self):
+		"""write fixture values to storage"""
+		self._persistFixtures()
+
 	# ── Group Management (promoted) ─────────────────────────
 
 	def CreateGroup(self, name: str, fixtureIds: List[int]):
@@ -836,10 +840,15 @@ class FixtureExt:
 	# ── Private Helpers ─────────────────────────────────────
 
 	def _afterValueChange(self, attrName: str, roles: Optional[Set[str]] = None):
-		"""Refresh dependency, display params, and storage after a channel value change."""
+		"""Refresh dependency and display params after a channel value change.
+
+		Deliberately does NOT persist to storage: this runs on every slider tick,
+		and storage only survives a project save anyway. Persistence happens in
+		PersistState (wired to onProjectPreSave) and in infrequent structural
+		changes (add/remove fixture, groups, network rebuild).
+		"""
 		self._updateDmxDependency(attrName)
 		self._updateChannelDisplayParams(attrName, roles=roles)
-		self._persistFixtures()
 
 	def _resolveChannel(self, channelName: str) -> Tuple[List[str], str]:
 		"""Return (uniqueNames, attrName) for a given attrName or uniqueName.
@@ -1197,11 +1206,12 @@ class FixtureExt:
 		if role == 'normalized':
 			compName = ['x', 'y', 'z', 'w'][compIdx]
 			unames, attrName = self._resolveChannel(channelName)
+			value = par.eval()
 			for fi in self._resolveTarget(targetStr):
 				for uname in unames:
 					channel = fi.channels.get(uname)
 					if channel:
-						setattr(channel.dmxValue, compName, par.eval() * (2 ** channel.bitDepth - 1))
+						setattr(channel.dmxValue, compName, value * (2 ** channel.bitDepth - 1))
 			self._afterValueChange(attrName, roles={'normalized'})
 		elif role == 'value':
 			self.SetDmxValue(channelName, par.eval(), targetStr)
