@@ -2,7 +2,7 @@
 
 A TouchDesigner tool that parses [GDTF](https://gdtf-share.com) fixture files and builds component networks with POP geometry, DMX channel attributes, and a full parameter UI.
 
-Once a fixture is loaded, the component can be used to control all fixtures of that type present in a setup. The first input of the component should be a Point POP with the number of points equaling the number fixtures of this type in the installation. A limiting factor is that all the fixtures should also be using the same DMX Mode. If the same fixture is present multiple times, but running with different DMX Modes, extra TDGdtf fixture components are required.
+Once a fixture is loaded, the component can be used to control all fixtures of that type present in a setup. The first input of the component should be a Point POP with the number of points equaling the number of fixtures of this type in the installation. A limiting factor is that all the fixtures should also be using the same DMX Mode. If the same fixture is present multiple times, but running with different DMX Modes, extra TDGdtf fixture components are required.
 
 To deal with fixture addressing, the Point POP can use the Point attributes:
 * `DMXFixtureNet`
@@ -15,11 +15,11 @@ to control the DMX addressing of the individual fixtures.
 
 To connect the fixtures to a DMX Out POP, reference the internal DMX Fixture POP called "fixture".
 
-The parameters to control the fixture are automatically created and by default all fiixtures of that type are controlled via these parameters at the same time. You can control individual fixtures by selecting them via the `Control Target` parameter on the "Channnel Functions" page.
+The parameters to control the fixture are automatically created and by default all fixtures of that type are controlled via these parameters at the same time. You can control individual fixtures by selecting them via the `Control Target` parameter on the "Channel Functions" page.
 
-Individual control is also possible via setting existing point or primitive attributes. This can be done by using the TDGdtf component's first output, modifying an existing attribute and wireing it back into the second input of the component. While a bit untraditional, this allows to do all manipulations outside the component without having to make any changes internaly.
+Individual control is also possible via setting existing point or primitive attributes. This can be done by using the TDGdtf component's first output, modifying an existing attribute and wiring it back into the second input of the component. While a bit untraditional, this allows all manipulations to happen outside the component without having to make any changes internally.
 
-A range of python methods exist to create groups, set values for channel functions of all, individual fixtures, or fixture groups. All availale methods are listed below. This can get a bit heavy for larger setups, so controlling fixtures via attributes is the intended and prefered way of working.
+A range of Python methods exists to create groups and set channel function values for all fixtures, individual fixtures, or fixture groups. All available methods are listed below. This can get a bit heavy for larger setups, so controlling fixtures via attributes is the intended and preferred way of working.
 
 ## Setup
 
@@ -51,7 +51,7 @@ mod.TDGdtf.toxPath('TDGdtfFixture')
 
 ### State persistence
 
-All parsed data — the channel template, fixture instances, groups, and every channel value — is persisted via TouchDesigner's StorageManager. Values are saved on every change, so the component fully restores its state after a project restart without re-reading the GDTF file.
+All parsed data — the channel template, fixture instances, groups, and channel values — is persisted via TouchDesigner's StorageManager, so the component fully restores its state after a project restart without re-reading the GDTF file. The channel template is stored when a file is parsed; fixture and group values are written on structural changes (adding/removing fixtures or groups) and automatically on project save via `PersistState()`. Channel value changes between saves are not persisted individually, so state on disk always reflects the last project save.
 
 ### Parsing behavior
 
@@ -86,6 +86,7 @@ All promoted functions are accessed via `op('yourComp').FunctionName(...)`.
 |---|---|
 | `DmxChannel(name)` | Return the `tdu.Dependency` for a single channel by name, or `None` if not found. |
 | `GetDmxChannelValues(name)` | Return a flat list of DMX values for a channel across all groups and fixtures. |
+| `PersistState()` | Write the current fixture and group values to storage. Called automatically on project save; call it manually to snapshot state at any other time. |
 
 ### Properties
 
@@ -187,6 +188,8 @@ All setter methods accept a `target` parameter that controls which fixture insta
 | `'0,2,front'` | Comma-separated mix of IDs and group names |
 
 `channelName` may be an attribute name (updates the channel in all geometry groups) or a group-qualified unique name like `'body_beam_Dimmer'` (updates one group only).
+
+> **Note:** `SetDmxValue` and `SetNormalizedValue` currently write only the first component of a channel. Multi-component channels (e.g. merged RGB vectors) can be fully set through the generated custom parameters, or per fixture via POP attribute lookups — modify the channel's attribute on the component's first output and wire it back into the second input, as described in the introduction.
 
 #### `SetDmxValue(channelName, value, target='all')`
 Set the raw DMX integer value on a channel.
@@ -329,7 +332,23 @@ python -m mypy
 `<TouchDesigner>/bin/Lib/tdi`. It is imported under `typing.TYPE_CHECKING` only, so IDEs
 and linters resolve TD builtins while nothing extra is imported at runtime.
 
+### Releasing
+
+Releases are built by the tag-triggered GitHub workflow. To publish a new release:
+
+1. Bump `__version__` in `src/TDGdtf/__init__.py` (`pyproject.toml` reads it dynamically) and commit.
+2. Tag the commit `v<version>` — the tag must match `__version__` exactly, or the workflow fails.
+3. Push the commit and the tag: `git push origin master v<version>`.
+
+The workflow builds the sdist and wheel and creates a GitHub release with notes auto-generated
+from the commit messages since the previous tag.
+
 ---
+
+## AI Transparency
+
+[Claude](https://claude.com/claude-code) (Anthropic) was used in the development of this
+project, primarily for documentation as well as Python optimizations and robustness.
 
 ## License
 
