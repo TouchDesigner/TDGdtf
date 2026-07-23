@@ -55,7 +55,7 @@ from TDGdtf.core.fixture import (
 	TouchDesignerFixture,
 )
 from TDGdtf.core.parser import GDTFParser
-from TDGdtf.core.utils import legalTdParName
+from TDGdtf.core.utils import legalPopName, legalTdParName
 
 tag = 'GDTFPARSER'
 
@@ -694,11 +694,15 @@ class FixtureExt:
 		geometries = dmxMode.tdGeometries if dmxMode.tdGeometries else []
 		for geo in geometries:
 			geoName = geo.name.lower()
-			geoName = tdu.validName(geoName)
 			groupName = None
 			if geo.isSequential:
 				# add in the parent name so that we can identify it more easily
 				geoName = '{}_{}'.format(geo.parent.name.lower(), geoName)
+			# POP group/attribute names and node names must start with a letter
+			# (e.g. Color Strike M geometries are named "68ch_..."), and characters
+			# like '/' are illegal — sanitize for both branches below
+			geoName = legalPopName(geoName, prefix='geo')
+			if geo.isSequential:
 				# this must be a linestrip
 				geoType = 'point'
 				geoOp = _createOp(linePOP, 'line_{}'.format(geoName))
@@ -739,7 +743,9 @@ class FixtureExt:
 				channel.geoGroup = groupName
 				channel.geoType = geoType
 				channel.instances = len(geo.sequentialMembers) if geo.isSequential else 1
-				channel.tdChannelName = tdu.validName(channel.name)
+				# channel.name is already TD-legal (sanitized in the parser), so the
+				# POP attribute name and the channel name are guaranteed identical
+				channel.tdChannelName = channel.name
 				allChannels.append(channel)
 				seqItem = attrOp.seq.attr[c]
 				seqItem.par.customname = channel.tdChannelName

@@ -16,7 +16,7 @@ from .fixture import (
     DMXModeInfo,
     TouchDesignerFixture,
 )
-from .utils import SEQNUMPATTERN, SEQNAMEPATTERN
+from .utils import SEQNUMPATTERN, SEQNAMEPATTERN, legalPopName
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +217,13 @@ class GDTFParser:
             match = SEQNAMEPATTERN.search(channelName)
             if match:
                 channelName = channelName[:match.start()] + channelName[match.end():]
+
+        # sanitize once at the source so POP attribute names, dependency keys, and
+        # parameter names all share the same TD-legal channel name
+        sanitized = legalPopName(channelName)
+        if sanitized != channelName:
+            logger.info('Channel %r renamed to %r for TouchDesigner compatibility', channelName, sanitized)
+            channelName = sanitized
 
         logicalChannel = firstChannel.logical_channels[0]
         channelFunctions = logicalChannel.channel_functions

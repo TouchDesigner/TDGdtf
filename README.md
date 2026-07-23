@@ -60,6 +60,7 @@ All parsed data — the channel template, fixture instances, groups, and every c
 - GDTF *virtual* channels (channels without a DMX offset) have no DMX footprint and are skipped with a warning.
 - Channels whose attribute is missing from the fixture's attribute list are kept but logged as a warning, and are never merged with neighbouring channels.
 - Channel names are sanitized into TD parameter names; if two different attributes sanitize to the same parameter name, a warning is logged and only the first one gets parameters.
+- POP attribute and group names must begin with a letter, so geometry and channel names are sanitized: characters outside `A-Za-z0-9_` become underscores, and names starting with a digit or underscore (e.g. the `68ch_...` geometries of the Chauvet Color Strike M) are prefixed with `geo` (geometry/group names) or `ch` (channels). Channels are renamed at parse time (each rename is logged), so the same TD-legal name is used consistently everywhere: POP attribute names, `DmxChannels`/`DmxChannelsByType` keys, setter `channelName` arguments, and parameter labels.
 
 ### Logging
 
