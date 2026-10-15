@@ -320,6 +320,7 @@ class FixtureExt:
 			{'name': '_savedModes', 'default': []},
 			{'name': '_fixtures', 'default': []},
 			{'name': '_groups', 'default': {}},
+			{'name': '_pointLayout', 'default': []},
 		]
 
 		self.stored = StorageManager(self, ownerComp, storedItems)
@@ -332,6 +333,7 @@ class FixtureExt:
 		self._parLookup: Dict[str, Tuple[str, str, int]] = {}
 		self._dmxDeps: Dict[str, Dependency] = {}
 		self._suppressParamCallbacks: bool = False
+		self._pointLayoutWarned: bool = False
 
 		if self._savedChannels:
 			self._channelTemplate = self._savedChannels
@@ -493,6 +495,41 @@ class FixtureExt:
 					result.extend(fiVal)
 				else:
 					result.append(fiVal)
+		return result
+
+	def GetPointChannelValues(self) -> Dict[str, List[Any]]:
+		"""Return {attrName: values} for every point channel, one value per geometry point.
+
+		Each list spans all points of all fixtures (fixture-major, point groups in
+		line-strip merge order), so every attribute matches the combined geometry's
+		point count. Points outside a channel's geoGroup get zero; the DMX Fixture POP
+		ignores them because each channel block is restricted to its group.
+		"""
+		layout = self._getPointLayout()
+		numFixtures = len(self._fixtureInstances)
+		result: Dict[str, List[Any]] = {}
+		for attrName in self.DmxChannelsByType['point']:
+			dep = self._dmxDeps.get(attrName)
+			chList = self._chsByAttrName.get(attrName, [])
+			if dep is None or not chList:
+				continue
+			# reading dep.val makes a cooking caller depend on value changes
+			val = dep.val
+			byGroup = val if isinstance(val, dict) else {chList[0].get('geoGroup'): val}
+			first = chList[0]
+			zero = 0.0 if first['normalized'] else 0
+			if first['components'] > 1:
+				zero = (zero,) * first['components']
+			values: List[Any] = []
+			for fiIndex in range(numFixtures):
+				for groupName, numPoints in layout:
+					groupVals = byGroup.get(groupName)
+					if groupVals is None or fiIndex >= len(groupVals):
+						values.extend([zero] * numPoints)
+						continue
+					fiVal = groupVals[fiIndex]
+					values.extend(fiVal if isinstance(fiVal, list) else [fiVal] * numPoints)
+			result[attrName] = values
 		return result
 
 	def PersistState(self):
@@ -689,6 +726,8 @@ class FixtureExt:
 		# first get the geometries
 		primitives = []
 		lineStrips = []
+		# [groupName, numPoints] per line strip, in merge order — defines point order
+		pointLayout: List[List[Any]] = []
 		primitiveMerge = None
 		lineStripMerge = None
 		geometries = dmxMode.tdGeometries if dmxMode.tdGeometries else []
@@ -722,6 +761,7 @@ class FixtureExt:
 				geoOp.outputConnectors[0].connect(groupOp.inputConnectors[0])
 				attrOp = geoOp
 				lineStrips.append(groupOp)
+				pointLayout.append([geoName, len(geo.sequentialMembers)])
 			else:
 				# this must be a point primitive
 				geoType = 'primitive'
@@ -818,6 +858,7 @@ class FixtureExt:
 		self._log.debug('CreateNetwork: fixture seq dmxchan set: %.3fs', time.time() - myTime)
 		# save channel template and build channel params
 		t_save = time.time()
+		self._pointLayout = pointLayout
 		self._saveState(allChannels)
 		self._log.debug('CreateNetwork: _saveState: %.3fs', time.time() - t_save)
 		self._channelTemplate = self._savedChannels
@@ -855,6 +896,27 @@ class FixtureExt:
 		"""
 		self._updateDmxDependency(attrName)
 		self._updateChannelDisplayParams(attrName, roles=roles)
+
+	def _getPointLayout(self) -> List[Tuple[str, int]]:
+		"""Return [(groupName, numPoints)] in geometry point order.
+
+		Falls back to deriving it from the channel template for networks built before
+		the layout was stored; that order follows DMX offsets, which can differ from
+		geometry order, so a re-parse is recommended.
+		"""
+		if self._pointLayout:
+			return [(g, int(n)) for g, n in self._pointLayout]
+		layout: List[Tuple[str, int]] = []
+		seen = set()
+		for ch in self._channelTemplate:
+			group = ch.get('geoGroup')
+			if ch.get('geoType') == 'point' and group not in seen:
+				seen.add(group)
+				layout.append((group, int(ch.get('instances', 1))))
+		if layout and not self._pointLayoutWarned:
+			self._pointLayoutWarned = True
+			self._log.warning('No stored point layout; derived from channel template - re-parse to store it')
+		return layout
 
 	def _resolveChannel(self, channelName: str) -> Tuple[List[str], str]:
 		"""Return (uniqueNames, attrName) for a given attrName or uniqueName.
